@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prime-qwen3-8b
+  namespace: llasta
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetch
+          image: python:3.11-slim
+          env:
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            # Optionnel: ajoute ton token HF si nécessaire
+            # - name: HUGGING_FACE_HUB_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: hf-token, key: token }
+          command: ["/bin/sh","-lc"]
+          args:
+            - |
+              pip install --no-cache-dir -q "huggingface_hub>=0.22" hf_transfer &&               python - <<'PY'
+              from huggingface_hub import snapshot_download
+              snapshot_download(
+                  repo_id="Qwen/Qwen3-8B",
+                  local_dir="/models/Qwen3-8B",
+                  local_dir_use_symlinks=False,
+              )
+              PY
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: qwen3-weights-src
