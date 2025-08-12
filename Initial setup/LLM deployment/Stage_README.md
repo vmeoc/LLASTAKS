@@ -52,7 +52,8 @@ aws ecr create-pull-through-cache-rule   --ecr-repository-prefix dockerhub   --u
 1) **Créer le namespace** + classes de stockage/snapshot
 ```bash
 kubectl apply -f 00-namespace.yaml
-kubectl apply -f 01-storageclasses.yaml
+kubectl config set-context llasta --namespace=llasta
+# pas nécessaire pour déploiement initial: kubectl apply -f 01-storageclasses.yaml
 ```
 
 2) **PVC source** (reçoit les poids)

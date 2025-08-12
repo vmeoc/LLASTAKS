@@ -29,6 +29,7 @@ Project name: LLASTA (LLM App Stack)
 ## File structure
 Project.md: contains this project description
 Diary.md: contains the diary of the project
+K8 deployment: contain all the terraform files for the K8 deployment
 Initial setup: contain all the yaml and instructions (stage.readme) for the initial deployment
 Recurring deployment: contain all the yaml and instructions (stage.readme) for the recurring deployment
 
@@ -51,12 +52,13 @@ Timeline:
 
 The BASICS:
 
-- [ ] Create github repo
+- [x] Create github repo
 - [x] create AWS account 
-- [ ] Ask for 12, 8 or 4 vCPU service quota for G instances
+- [x] Ask for 12, 8 or 4 vCPU service quota for G instances
+- [ ] Choose the AWS Instance type: G5.xlarge (https://aws.amazon.com/blogs/aws/new-ec2-instances-g5-with-nvidia-a10g-tensor-core-gpus/?utm_source=chatgpt.com & https://instances.vantage.sh/aws/ec2/g5.xlarge?currency=USD)
 - [ ] deploy a cluster, ideally with 1 GPU powered node
-- [ ] Host the weights & biases in S3
-- [ ] Load the LLM container
+- [ ] Host the weights & biases in ebs
+- [ ] Load the LLM container in ECR
 - [ ] Connect to LLM
 - [ ] Turn all these step as IAC or command line and make it easy to deploy it and clean it up.
 

@@ -2,7 +2,7 @@
 
 ## Objective
 
-This guide explains how to deploy a **minimal EKS cluster** on AWS using Terraform, with the **default VPC**, no add-ons, to prepare a basic Kubernetes environment.
+This guide explains how to deploy a **EKS cluster with 1 GPU node** on AWS using Terraform, with the **default VPC**, no add-ons, to prepare a basic Kubernetes environment.
 
 ---
 
@@ -83,7 +83,8 @@ terraform apply -auto-approve
 ### 3. Configure kubectl for this cluster
 
 ```bash
-aws eks update-kubeconfig --region us-east-1 --name llasta-minimal
+aws eks update-kubeconfig --region us-east-1 --name llasta
+kubectl config use-context llasta
 ```
 
 ### 4. Check that the cluster is running

@@ -18,7 +18,7 @@ data "aws_subnet" "by_id" {
 
 # Keep only subnets in EKS-supported AZs (avoid us-east-1e)
 locals {
-  cluster_name   = "llasta-minimal"
+  cluster_name   = "llasta"
   supported_azs  = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1f"]
 
   filtered_subnet_ids = compact([
@@ -131,8 +131,9 @@ resource "aws_eks_node_group" "default" {
     min_size     = 1
   }
 
-  instance_types = ["t3.medium"]
-  ami_type       = "AL2_x86_64"
+  instance_types = ["g5.xlarge"]
+  ami_type       = "AL2_x86_64_GPU"  # AMI optimisée GPU avec drivers NVIDIA pré-installés
+  capacity_type  = "SPOT"            # Utilise des instances Spot (60-90% moins cher)
 
   # Ensure subnets are tagged before creating the node group
   depends_on = [
