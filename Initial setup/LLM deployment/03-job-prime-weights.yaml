@@ -13,20 +13,42 @@ spec:
           env:
             - name: HF_HUB_ENABLE_HF_TRANSFER
               value: "1"
-            # Optionnel: ajoute ton token HF si nécessaire
-            # - name: HUGGING_FACE_HUB_TOKEN
-            #   valueFrom:
-            #     secretKeyRef: { name: hf-token, key: token }
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: 
+                  name: hf-token
+                  key: token
           command: ["/bin/sh","-lc"]
           args:
             - |
-              pip install --no-cache-dir -q "huggingface_hub>=0.22" hf_transfer &&               python - <<'PY'
+              echo "🚀 Starting Qwen3-8B model download..."
+              echo "📦 Installing dependencies..."
+              pip install --no-cache-dir -q "huggingface_hub>=0.22" hf_transfer &&
+              echo "✅ Dependencies installed successfully"
+              echo "📥 Starting model download (this may take 5-15 minutes)..."
+              python - <<'PY'
+              import os
               from huggingface_hub import snapshot_download
+              print("🔄 Downloading Qwen/Qwen3-8B...")
               snapshot_download(
                   repo_id="Qwen/Qwen3-8B",
                   local_dir="/models/Qwen3-8B",
                   local_dir_use_symlinks=False,
               )
+              print("✅ Model download completed successfully!")
+              print("📊 Checking downloaded files...")
+              import subprocess
+              result = subprocess.run(['find', '/models/Qwen3-8B', '-type', 'f'], 
+                                    capture_output=True, text=True)
+              file_count = len(result.stdout.strip().split('\n')) if result.stdout.strip() else 0
+              print(f"📁 Downloaded {file_count} files")
+              
+              result = subprocess.run(['du', '-sh', '/models/Qwen3-8B'], 
+                                    capture_output=True, text=True)
+              if result.stdout:
+                  size = result.stdout.split()[0]
+                  print(f"💾 Total size: {size}")
+              print("🎉 Qwen3-8B model ready for use!")
               PY
           volumeMounts:
             - name: models

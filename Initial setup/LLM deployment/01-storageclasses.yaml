@@ -7,7 +7,11 @@ parameters:
   type: gp3
   encrypted: "true"
   fsType: ext4
-reclaimPolicy: Delete
+  # Tags automatiques pour tous les volumes créés avec cette StorageClass
+  tagSpecification_1: "Key=Project,Value=llasta"
+  tagSpecification_2: "Key=CreatedBy,Value=EBS-CSI-Driver"
+  tagSpecification_3: "Key=ManagedBy,Value=Kubernetes"
+reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
 ---

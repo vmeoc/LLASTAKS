@@ -30,7 +30,7 @@ locals {
 # === REQUIRED TAGS on subnets for EKS Nodegroup ===
 # Tag each selected subnet so the node group can use them.
 resource "aws_ec2_tag" "subnet_cluster_shared" {
-  for_each   = toset(local.filtered_subnet_ids)
+  for_each    = toset(local.filtered_subnet_ids)
   resource_id = each.value
   key         = "kubernetes.io/cluster/${local.cluster_name}"
   value       = "shared"
@@ -38,7 +38,7 @@ resource "aws_ec2_tag" "subnet_cluster_shared" {
 
 # (Optional but good to have on public subnets; harmless if already present)
 resource "aws_ec2_tag" "subnet_elb" {
-  for_each   = toset(local.filtered_subnet_ids)
+  for_each    = toset(local.filtered_subnet_ids)
   resource_id = each.value
   key         = "kubernetes.io/role/elb"
   value       = "1"
@@ -131,9 +131,22 @@ resource "aws_eks_node_group" "default" {
     min_size     = 1
   }
 
-  instance_types = ["g5.xlarge"]
-  ami_type       = "AL2_x86_64_GPU"  # AMI optimisée GPU avec drivers NVIDIA pré-installés
-  capacity_type  = "SPOT"            # Utilise des instances Spot (60-90% moins cher)
+  # GPU Spot (4 vCPU / 1 GPU)
+  capacity_type  = "SPOT"
+  ami_type       = "AL2_x86_64_GPU"
+
+  # Ajout de g6.xlarge et g6e.xlarge
+  instance_types = [
+    "g5.xlarge",
+    "g6.xlarge",
+    "g6e.xlarge",
+  ]
+
+  # Configuration du volume EBS racine
+  disk_size = 100
+
+  # Pour forcer le refresh du nodegroup si nécessaire
+  force_update_version = true
 
   # Ensure subnets are tagged before creating the node group
   depends_on = [

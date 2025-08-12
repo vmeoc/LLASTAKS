@@ -56,8 +56,8 @@ The BASICS:
 - [x] create AWS account 
 - [x] Ask for 12, 8 or 4 vCPU service quota for G instances
 - [ ] Choose the AWS Instance type: G5.xlarge (https://aws.amazon.com/blogs/aws/new-ec2-instances-g5-with-nvidia-a10g-tensor-core-gpus/?utm_source=chatgpt.com & https://instances.vantage.sh/aws/ec2/g5.xlarge?currency=USD)
-- [ ] deploy a cluster, ideally with 1 GPU powered node
-- [ ] Host the weights & biases in ebs
+- [x] deploy a cluster, ideally with 1 GPU powered node
+- [x] Host the weights & biases in ebs
 - [ ] Load the LLM container in ECR
 - [ ] Connect to LLM
 - [ ] Turn all these step as IAC or command line and make it easy to deploy it and clean it up.

@@ -16,7 +16,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: vllm
-          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vllm/vllm-openai:latest
+          image: vllm/vllm-openai:v0.10.0
           # Conseil: pinner un tag (ex: v0.8.0) après le premier test au lieu de 'latest'
           args:
             - --model
@@ -39,6 +39,7 @@ spec:
             requests:
               cpu: "2"
               memory: "8Gi"
+              nvidia.com/gpu: 1
           volumeMounts:
             - name: models
               mountPath: /models
@@ -53,7 +54,7 @@ spec:
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: qwen3-weights
+            claimName: qwen3-weights-src
 ---
 apiVersion: v1
 kind: Service
