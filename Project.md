@@ -120,3 +120,4 @@ Code execution
 
 ## TODO
 [ ]automatiser l'output du terraform de créationd du K8 cluster avec GPU pour le mettre dans .kube/Config
+[ ] automatiser l'attachement au rôle des nœuds la policy `AmazonEC2ContainerRegistryReadOnly` pour autoriser les pulls depuis ECR privé.

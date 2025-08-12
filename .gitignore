@@ -1,3 +1,5 @@
 .env
 Diary.md
 Initial setup/K8 deployment/.terraform
+Initial setup/K8 deployment/terraform.tfstate
+Initial setup/K8 deployment/terraform.tfstate.backup
