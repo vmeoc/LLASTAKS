@@ -111,7 +111,7 @@ kubectl describe nodes | grep -A 5 -B 5 nvidia.com/gpu
 # Doit afficher: nvidia.com/gpu: 1 dans Capacity et Allocatable
 ```
 
-> **💡 Pourquoi cette étape ?** L'AMI `AL2_x86_64_GPU` contient les drivers NVIDIA, mais le **Device Plugin** est nécessaire pour exposer les ressources GPU à l'API Kubernetes. Sans lui, les pods ne peuvent pas demander de ressources `nvidia.com/gpu`.
+> **💡 Pourquoi cette étape ?** L'AMI  contient les drivers NVIDIA, mais le **Device Plugin** est nécessaire pour exposer les ressources GPU à l'API Kubernetes. Sans lui, les pods ne peuvent pas demander de ressources `nvidia.com/gpu`.
 
 ---
 

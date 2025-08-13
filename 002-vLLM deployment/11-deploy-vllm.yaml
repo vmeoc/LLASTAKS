@@ -25,14 +25,25 @@ spec:
             - 0.0.0.0
             - --port
             - "8000"
+            # Mémoire / contexte
+            - --gpu-memory-utilization
+            - "0.92"
             - --max-model-len
-            - "30160"
+            - "12288"              # monte à 16k si tu veux tester la limite
+            - --kv-cache-dtype
+            - fp16
+            # Exec
             - --dtype
             - auto
-            - --served-model-name
-            - Qwen3-8B
-            - --gpu-memory-utilization
-            - "0.95"
+            - --enable-chunked-prefill
+            - "true"
+
+            # Simplicité / logs
+            - --max-num-seqs
+            - "1"
+            - --uvicorn-log-level
+            - warning
+            - --disable-log-requests
           ports:
             - { containerPort: 8000, name: http }
           resources:

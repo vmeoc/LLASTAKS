@@ -72,7 +72,7 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_AmazonEKSServicePolicy" {
 resource "aws_eks_cluster" "this" {
   name     = local.cluster_name
   role_arn = aws_iam_role.eks_cluster_role.arn
-  version  = "1.29"
+  version  = "1.33"
 
   vpc_config {
     subnet_ids = local.filtered_subnet_ids
@@ -133,10 +133,11 @@ resource "aws_eks_node_group" "default" {
 
   # GPU Spot (4 vCPU / 1 GPU)
   capacity_type  = "SPOT"
-  ami_type       = "AL2_x86_64_GPU"
+  ami_type       = "AL2023_x86_64_NVIDIA"
 
   # Ajout de g6.xlarge et g6e.xlarge
   instance_types = [
+    "g4dn.xlarge",
     "g5.xlarge",
     "g6.xlarge",
     "g6e.xlarge",
