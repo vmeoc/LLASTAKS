@@ -83,7 +83,8 @@ terraform apply -auto-approve
 ### 3. Configure kubectl for this cluster
 
 ```bash
-aws eks update-kubeconfig --region us-east-1 --name llasta
+aws eks update-kubeconfig --region us-east-1 --name llasta --alias llasta
+kubectl config set-context llasta --namespace=llasta
 kubectl config use-context llasta
 ```
 
@@ -92,8 +93,57 @@ kubectl config use-context llasta
 ```bash
 kubectl get nodes
 ```
+### 5. setup inside K8
+
+**Installer le NVIDIA Device Plugin** (requis pour exposer les GPU aux pods) :
+```bash
+# Installer le NVIDIA Device Plugin
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
+
+# Vérifier que les pods NVIDIA démarrent
+kubectl get pods -n kube-system -l name=nvidia-device-plugin-ds
+
+# Attendre la détection des GPU (30-60 secondes)
+sleep 60
+
+# Vérifier que les GPU sont maintenant visibles dans Kubernetes
+kubectl describe nodes | grep -A 5 -B 5 nvidia.com/gpu
+# Doit afficher: nvidia.com/gpu: 1 dans Capacity et Allocatable
+```
+
+> **💡 Pourquoi cette étape ?** L'AMI `AL2_x86_64_GPU` contient les drivers NVIDIA, mais le **Device Plugin** est nécessaire pour exposer les ressources GPU à l'API Kubernetes. Sans lui, les pods ne peuvent pas demander de ressources `nvidia.com/gpu`.
 
 ---
+
+### 1.0 Vérifier et installer les composants EKS nécessaires
+
+**Vérifier l'EBS CSI Driver** (requis pour les volumes EBS) :
+```bash
+aws eks describe-addon --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
+```
+
+Si pas installé :
+```bash
+aws eks create-addon --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
+```
+
+**Vérifier que les pods EBS CSI fonctionnent** :
+```bash
+kubectl get pods -n kube-system | grep ebs
+# Doit afficher des pods ebs-csi-controller et ebs-csi-node en Running
+```
+
+**IMPORTANT : Ajouter les permissions EBS au rôle des nœuds** :
+```bash
+# Cette étape est CRUCIALE pour que l'EBS CSI Driver puisse créer des volumes
+aws iam attach-role-policy --role-name eks-node-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+```
+
+**Vérifier que les permissions sont appliquées** :
+```bash
+aws iam list-attached-role-policies --role-name eks-node-role
+# Doit inclure AmazonEBSCSIDriverPolicy dans la liste
+```
 
 ## **Using the Cluster**
 

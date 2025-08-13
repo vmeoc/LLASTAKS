@@ -16,7 +16,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: vllm
-          image: vllm/vllm-openai:v0.10.0
+          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vllm/vllm-openai:v0.10.0
           # Conseil: pinner un tag (ex: v0.8.0) après le premier test au lieu de 'latest'
           args:
             - --model
@@ -26,19 +26,22 @@ spec:
             - --port
             - "8000"
             - --max-model-len
-            - "32768"
+            - "30160"
             - --dtype
             - auto
             - --served-model-name
             - Qwen3-8B
+            - --gpu-memory-utilization
+            - "0.95"
           ports:
             - { containerPort: 8000, name: http }
           resources:
             limits:
               nvidia.com/gpu: 1
+              memory: "14Gi"
             requests:
               cpu: "2"
-              memory: "8Gi"
+              memory: "12Gi"
               nvidia.com/gpu: 1
           volumeMounts:
             - name: models
