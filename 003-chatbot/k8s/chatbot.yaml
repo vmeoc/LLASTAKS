@@ -1,0 +1,236 @@
+# LLASTA Chatbot - Manifests Kubernetes
+# 
+# Ce fichier contient tous les manifests nécessaires pour déployer le chatbot:
+# - ConfigMap: Configuration non-sensible
+# - Secret: Clés API (si nécessaire)
+# - Deployment: Déploiement du backend FastAPI
+# - Service: Exposition interne du backend
+#
+# Architecture K8s:
+# Frontend (statique) ←→ Backend (FastAPI Pod) ←→ vLLM Service (déjà déployé)
+
+---
+# ConfigMap pour la configuration du chatbot
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatbot-config
+  namespace: default
+  labels:
+    app: llasta-chatbot
+    component: config
+data:
+  # URL du service vLLM (DNS interne Kubernetes)
+  VLLM_BASE_URL: "http://vllm.llasta.svc.cluster.local:8000"
+  
+  # Configuration FastAPI
+  FASTAPI_HOST: "0.0.0.0"
+  FASTAPI_PORT: "8080"
+  
+  # Configuration du modèle
+  MODEL_NAME: "Qwen3-8B"
+  MAX_TOKENS: "1000"
+  TEMPERATURE: "0.7"
+
+---
+# Secret pour les clés API (optionnel, vLLM n'en a généralement pas besoin)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chatbot-secrets
+  namespace: default
+  labels:
+    app: llasta-chatbot
+    component: secrets
+type: Opaque
+data:
+  # Clé API factice encodée en base64 (echo -n "dummy-key" | base64)
+  VLLM_API_KEY: ZHVtbXkta2V5
+
+---
+# Deployment du backend FastAPI
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llasta-chatbot
+  namespace: default
+  labels:
+    app: llasta-chatbot
+    component: backend
+spec:
+  # Une seule réplique pour commencer (peut être augmenté plus tard)
+  replicas: 1
+  
+  selector:
+    matchLabels:
+      app: llasta-chatbot
+      component: backend
+  
+  template:
+    metadata:
+      labels:
+        app: llasta-chatbot
+        component: backend
+    spec:
+      containers:
+      - name: chatbot-backend
+        # Image à construire et pousser vers ECR ou Docker Hub
+        image: llasta/chatbot-backend:latest
+        
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        
+        # Variables d'environnement depuis ConfigMap et Secret
+        env:
+        - name: VLLM_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: chatbot-config
+              key: VLLM_BASE_URL
+        
+        - name: VLLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: chatbot-secrets
+              key: VLLM_API_KEY
+        
+        - name: FASTAPI_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: chatbot-config
+              key: FASTAPI_HOST
+        
+        - name: FASTAPI_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: chatbot-config
+              key: FASTAPI_PORT
+        
+        # Health checks pour Kubernetes
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        # Ressources allouées
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # Montage du volume pour les fichiers statiques (si nécessaire)
+        # volumeMounts:
+        # - name: frontend-files
+        #   mountPath: /app/frontend
+        #   readOnly: true
+      
+      # Volumes (si nécessaire pour les fichiers statiques)
+      # volumes:
+      # - name: frontend-files
+      #   configMap:
+      #     name: frontend-files
+      
+      # Politique de redémarrage
+      restartPolicy: Always
+
+---
+# Service pour exposer le backend en interne
+apiVersion: v1
+kind: Service
+metadata:
+  name: llasta-chatbot
+  namespace: default
+  labels:
+    app: llasta-chatbot
+    component: service
+spec:
+  type: ClusterIP  # Accès interne seulement
+  
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  
+  selector:
+    app: llasta-chatbot
+    component: backend
+
+---
+# Optionnel: Ingress pour l'accès externe (à décommenter si nécessaire)
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: llasta-chatbot-ingress
+#   namespace: default
+#   labels:
+#     app: llasta-chatbot
+#     component: ingress
+#   annotations:
+#     # Annotations pour votre ingress controller (nginx, traefik, etc.)
+#     kubernetes.io/ingress.class: "nginx"
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+# spec:
+#   rules:
+#   - host: chatbot.llasta.local  # Remplacer par votre domaine
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: llasta-chatbot
+#             port:
+#               number: 8080
+
+---
+# Optionnel: HorizontalPodAutoscaler pour l'auto-scaling
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: llasta-chatbot-hpa
+#   namespace: default
+#   labels:
+#     app: llasta-chatbot
+#     component: autoscaler
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: llasta-chatbot
+#   
+#   minReplicas: 1
+#   maxReplicas: 5
+#   
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   
+#   - type: Resource
+#     resource:
+#       name: memory
+#       target:
+#         type: Utilization
+#         averageUtilization: 80

@@ -1,0 +1,12 @@
+# LLASTA Chatbot Backend - Dépendances Python
+# 
+# FastAPI: Framework web moderne et rapide pour créer des APIs
+# uvicorn: Serveur ASGI pour FastAPI
+# httpx: Client HTTP asynchrone pour communiquer avec vLLM
+# pydantic: Validation des données et sérialisation
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+httpx==0.25.2
+pydantic==2.5.0
+python-multipart==0.0.6  # Pour le support des formulaires

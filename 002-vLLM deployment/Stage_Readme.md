@@ -78,7 +78,7 @@ API locale : `http://127.0.0.1:8000`
 ```bash
 curl -s "http://127.0.0.1:8000/v1/chat/completions"   -H "Content-Type: application/json"   -H "Authorization: Bearer sk-fake"   -d '{
     "model": "Qwen/Qwen3-8B",
-    "messages": [{"role":"user","content":"Bonjour Qwen3, résume LLASTA en une phrase."}]
+    "messages": [{"role":"user","content":"Hey, how are you doing" /no_think}]
   }' | jq .
 ```
 
