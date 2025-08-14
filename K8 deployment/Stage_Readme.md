@@ -124,7 +124,11 @@ aws eks describe-addon --cluster-name llasta --addon-name aws-ebs-csi-driver --r
 
 Si pas installé :
 ```bash
-aws eks create-addon --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
+aws eks create-addon \
+  --cluster-name llasta \
+  --addon-name aws-ebs-csi-driver \
+  --service-account-role-arn arn:aws:iam::142473567252:role/eks-node-role \
+  --region us-east-1
 ```
 
 **Vérifier que les pods EBS CSI fonctionnent** :

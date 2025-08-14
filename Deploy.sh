@@ -2,7 +2,7 @@
 # Script to deploy Qwen3-8B on AWS EKS using vLLM
 
 #Go to K8 deployment directory
-cd ../001-K8 deployment
+cd K8 deployment
 
 #K8 deployment
 terraform apply --auto-approve
@@ -30,21 +30,46 @@ sleep 60
 kubectl describe nodes | grep -A 5 -B 5 nvidia.com/gpu
 # Doit afficher: nvidia.com/gpu: 1 dans Capacity et Allocatable
 
-#vérifier l'EBS SCSI driver
-aws eks describe-addon --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
+# Vérifier l'AZ des nœuds pour s'assurer qu'ils sont dans us-east-1d
+NODE_AZ=$(kubectl get nodes -o jsonpath='{.items[0].metadata.labels.topology\.kubernetes\.io/zone}')
+echo "✅ Nœuds déployés dans l'AZ: $NODE_AZ"
+if [ "$NODE_AZ" != "us-east-1d" ]; then
+  echo "⚠️  ATTENTION: Nœuds dans $NODE_AZ au lieu de us-east-1d"
+  echo "   Vérifiez que votre volume EBS est aussi dans $NODE_AZ"
+fi
+
+#Install EBS CSI driver avec Service Account
+echo "Installing EBS CSI Driver addon..."
+aws eks create-addon \
+    --cluster-name llasta \
+    --addon-name aws-ebs-csi-driver \
+    --service-account-role-arn arn:aws:iam::142473567252:role/AmazonEKS_EBS_CSI_DriverRole \
+    --region us-east-1
+fi
+
+# Attendre que l'addon soit actif
+echo "Waiting for EBS CSI Driver to be active..."
+aws eks wait addon-active --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
 
 #IMPORTANT : Ajouter les permissions EBS au rôle des nœuds
 aws iam attach-role-policy --role-name eks-node-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
 
-echo("K8 deployment and setup completed. Now, we start the vLLM deployment phase")
+# Vérifier l'installation
+echo "Verifying EBS CSI Driver installation..."
+kubectl get pods -n kube-system | grep ebs-csi
+
+echo"K8 deployment and setup completed. Now, we start the vLLM deployment phase"
 
 #Go to vLLM deployment directory
-cd ../002-vLLM deployment
+cd "../002-vLLM deployment"
+
+#création du namespace
+kubectl apply -f 00-namespace.yaml
 
 # Créer le PersistentVolume qui référence au volume contenant les poids Qwen3-8B INT4
 kubectl apply -f 10-pvc-from-ebs.yaml
 
-#Vérifier que le PVC est bien lié
+#Vérifier que le PVC est bien lié. A Améliorer: attente qu'il passe en bound
 kubectl get pvc qwen3-weights-src
 
 #Déployer le runtime vLLM

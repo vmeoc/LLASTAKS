@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: qwen3-weights-recovered-pv
+  name: qwen3-weights-pv-v2
 spec:
   capacity:
     storage: 40Gi
@@ -11,7 +11,7 @@ spec:
   storageClassName: gp3
   csi:
     driver: ebs.csi.aws.com
-    volumeHandle: vol-04ae2597d3ae4b8bb
+    volumeHandle: vol-013265b82a90665e2
     fsType: ext4
 ---
 apiVersion: v1
@@ -26,4 +26,4 @@ spec:
   resources:
     requests:
       storage: 40Gi
-  volumeName: qwen3-weights-recovered-pv
+  volumeName: qwen3-weights-pv-v2

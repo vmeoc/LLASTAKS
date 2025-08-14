@@ -36,10 +36,10 @@ Recurring deployment: contain all the yaml and instructions (stage.readme) for t
 Need:
 
 - [x] Free AWS account
-- [ ] Github account
-- [ ] Cluster with GPU able to host LLM
-- [x] Choose the LLM. need to be accurate, good at instruction following and function calling, fine tunable. testé avec Ollama: [qwen3](https://ollama.com/library/qwen3 "qwen3")**:8b (INT4)**
-- [x] Trouver container docker: [Docker vLLM openai](https://hub.docker.com/r/vllm/vllm-openai "https://hub.docker.com/r/vllm/vllm-openai") (16GB)
+- [x] Github account
+- [x] Cluster with GPU able to host LLM
+- [x] Choose the LLM. need to be accurate, good at instruction following and function calling, fine tunable. https://huggingface.co/RedHatAI/Qwen3-8B-quantized.w4a16 **:8b (INT4)**
+- [x] Trouver container docker: [Docker vLLM openai](https://hub.docker.com/r/vllm/vllm-openai "https://hub.docker.com/r/vllm/vllm-openai") (16GB)
 - [x] [Whimsical diagram](https://whimsical.com/BCS9f3idP7VFGYW5n8XbTE "https://whimsical.com/BCS9f3idP7VFGYW5n8XbTE")
 - [ ] Fine tune dataset
 - [ ] App code
@@ -53,19 +53,20 @@ Timeline:
 The BASICS:
 
 - [x] Create github repo
-- [x] create AWS account 
+- [x] create AWS account
 - [x] Ask for 12, 8 or 4 vCPU service quota for G instances
-- [ ] Choose the AWS Instance type: G5.xlarge (https://aws.amazon.com/ec2/instance-types/g5/ & https://instances.vantage.sh/aws/ec2/g5.xlarge?currency=USD)
+- [x] Choose the AWS Instance type: G5.xlarge (https://aws.amazon.com/ec2/instance-types/g5/ & https://instances.vantage.sh/aws/ec2/g5.xlarge?currency=USD)
 - [x] deploy a cluster, ideally with 1 GPU powered node
 - [x] Host the weights & biases in ebs
-- [ ] Load the LLM container in ECR
-- [ ] Connect to LLM
+- [x] Load the LLM container in ECR
+- [x] Connect to LLM
 - [ ] Turn all these step as IAC or command line and make it easy to deploy it and clean it up.
 
 <br>
 
 The chatbot app:
 
+- [ ] create the custom chatbot code: Discussion: https://chatgpt.com/c/689c1861-a6b0-8329-961c-f1ae5dbbeac8
 - [ ] Host the chatbot code in serverless or K8
 - [ ] Secure the outside connection to the chatbot code
 - [ ] Automatically deploy it

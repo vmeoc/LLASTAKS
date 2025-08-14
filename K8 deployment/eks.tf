@@ -19,7 +19,7 @@ data "aws_subnet" "by_id" {
 # Keep only subnets in EKS-supported AZs (avoid us-east-1e)
 locals {
   cluster_name   = "llasta"
-  supported_azs  = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1f"]
+  supported_azs  = ["us-east-1d"]  # Force une seule AZ pour éviter les problèmes EBS
 
   filtered_subnet_ids = compact([
     for s in values(data.aws_subnet.by_id) :
@@ -84,6 +84,46 @@ resource "aws_eks_cluster" "this" {
   ]
 }
 
+# === OIDC Provider (requis pour EKS 1.33+ addons) ===
+data "tls_certificate" "eks_oidc" {
+  url = aws_eks_cluster.this.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks_oidc" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.this.identity[0].oidc[0].issuer
+}
+
+# === Rôle IAM pour EBS CSI Driver ===
+resource "aws_iam_role" "ebs_csi_driver_role" {
+  name = "AmazonEKS_EBS_CSI_DriverRole"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks_oidc.arn
+        }
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+            "${replace(aws_iam_openid_connect_provider.eks_oidc.url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_driver_policy" {
+  role       = aws_iam_role.ebs_csi_driver_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 # === IAM for EKS Nodes ===
 resource "aws_iam_role" "eks_node_role" {
   name = "eks-node-role"
@@ -132,15 +172,12 @@ resource "aws_eks_node_group" "default" {
   }
 
   # GPU Spot (4 vCPU / 1 GPU)
-  capacity_type  = "SPOT"
+  capacity_type  = "ON_DEMAND"
   ami_type       = "AL2023_x86_64_NVIDIA"
 
   # Ajout de g6.xlarge et g6e.xlarge
   instance_types = [
-    "g4dn.xlarge",
     "g5.xlarge",
-    "g6.xlarge",
-    "g6e.xlarge",
   ]
 
   # Configuration du volume EBS racine

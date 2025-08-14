@@ -21,17 +21,19 @@ spec:
           args:
             - --model
             - /models/Qwen3-8B
+            - --served-model-name
+            - Qwen3-8B
             - --host
             - 0.0.0.0
             - --port
             - "8000"
             # Mémoire / contexte
             - --gpu-memory-utilization
-            - "0.92"
+            - "0.90"
             - --max-model-len
-            - "12288"              # monte à 16k si tu veux tester la limite
+            - "16384"              # profite des 24GB de l'A10
             - --kv-cache-dtype
-            - fp16
+            - auto
             # Exec
             - --dtype
             - auto

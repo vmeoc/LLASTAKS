@@ -56,8 +56,9 @@ kubectl get pvc qwen3-weights-src
 ### 2.2 Déployer le runtime **vLLM** (image via ECR PTC)
 ```bash
 kubectl apply -f 11-deploy-vllm.yaml
-kubectl -n llasta rollout status deploy/vllm-qwen3
-kubectl -n llasta get pods -l app=vllm-qwen3 -w
+kubectl -n llasta get events   --watch   --field-selector involvedObject.name=$(kubectl -n llasta get pod -l app=vllm-qwen3 -o name | cut -d/ -f2)kubectl -n llasta get pods -l app=vllm-qwen3 -w
+kubectl logs <pod_name> -n llasta --tail=20 -f
+
 ```
 Si erreur pour le téléchargement depuis ECR, voir si la création d'un ECR en AWS CLI résoud le problème.
 
