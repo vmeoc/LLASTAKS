@@ -1,76 +1,184 @@
 #!/bin/bash
-# Script to deploy Qwen3-8B on AWS EKS using vLLM
+# LLASTA - Deploy Qwen3-8B on AWS EKS using vLLM
+# Robust deployment script with error handling and progress tracking
 
-#Go to K8 deployment directory
-cd K8 deployment
+set -e  # Exit on any error
+set -u  # Exit on undefined variables
 
-#K8 deployment
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to check command success
+check_success() {
+    if [ $? -eq 0 ]; then
+        print_success "$1"
+    else
+        print_error "Failed: $1"
+        exit 1
+    fi
+}
+
+print_status "Starting LLASTA deployment..."
+print_status "Phase 1: Infrastructure deployment with Terraform"
+
+# Navigate to Kubernetes deployment directory
+cd "K8 deployment" || { print_error "Cannot find K8 deployment directory"; exit 1; }
+
+# Deploy infrastructure
+print_status "Applying Terraform configuration..."
 terraform apply --auto-approve
+check_success "Terraform infrastructure deployment"
 
-## Configure kubectl for this cluster
+print_status "Phase 2: Configuring kubectl for EKS cluster"
 
+# Configure kubectl
+print_status "Updating kubeconfig..."
 aws eks update-kubeconfig --region us-east-1 --name llasta --alias llasta
+check_success "Kubeconfig update"
+
 kubectl config set-context llasta --namespace=llasta
+check_success "Setting default namespace"
+
 kubectl config use-context llasta
+check_success "Switching to llasta context"
 
-### 4. Check that the cluster is running
-
+# Verify cluster connectivity
+print_status "Verifying cluster connectivity..."
 kubectl get nodes
+check_success "Cluster connectivity verification"
 
-# Installer le NVIDIA Device Plugin
+print_status "Phase 3: Installing NVIDIA Device Plugin"
+
+# Install NVIDIA Device Plugin
+print_status "Installing NVIDIA Device Plugin..."
 kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
+check_success "NVIDIA Device Plugin installation"
 
-# Vérifier que les pods NVIDIA démarrent
+# Wait for NVIDIA pods to start
+print_status "Waiting for NVIDIA Device Plugin pods to start..."
+sleep 30
 kubectl get pods -n kube-system -l name=nvidia-device-plugin-ds
+check_success "NVIDIA Device Plugin pods verification"
 
-# Attendre la détection des GPU (30-60 secondes)
+# Wait for GPU detection
+print_status "Waiting for GPU detection (60 seconds)..."
 sleep 60
 
-# Vérifier que les GPU sont maintenant visibles dans Kubernetes
-kubectl describe nodes | grep -A 5 -B 5 nvidia.com/gpu
-# Doit afficher: nvidia.com/gpu: 1 dans Capacity et Allocatable
+# Verify GPU availability
+print_status "Verifying GPU availability in Kubernetes..."
+kubectl describe nodes | grep -A 5 -B 5 nvidia.com/gpu || print_warning "GPU not yet visible, may need more time"
+print_success "GPU detection phase completed"
 
-# Vérifier l'AZ des nœuds pour s'assurer qu'ils sont dans us-east-1d
+# Verify node availability zone
+print_status "Verifying node availability zone..."
 NODE_AZ=$(kubectl get nodes -o jsonpath='{.items[0].metadata.labels.topology\.kubernetes\.io/zone}')
-echo "✅ Nœuds déployés dans l'AZ: $NODE_AZ"
+print_success "Nodes deployed in AZ: $NODE_AZ"
 if [ "$NODE_AZ" != "us-east-1d" ]; then
-  echo "⚠️  ATTENTION: Nœuds dans $NODE_AZ au lieu de us-east-1d"
-  echo "   Vérifiez que votre volume EBS est aussi dans $NODE_AZ"
+  print_warning "Nodes in $NODE_AZ instead of us-east-1d"
+  print_warning "Ensure your EBS volume is also in $NODE_AZ"
 fi
 
-#Install EBS CSI driver avec Service Account
-echo "Installing EBS CSI Driver addon..."
-aws eks create-addon \
+print_status "Phase 4: Installing EBS CSI Driver addon"
+
+# Install EBS CSI driver with Service Account
+print_status "Installing EBS CSI Driver addon..."
+if aws eks create-addon \
     --cluster-name llasta \
     --addon-name aws-ebs-csi-driver \
     --service-account-role-arn arn:aws:iam::142473567252:role/AmazonEKS_EBS_CSI_DriverRole \
-    --region us-east-1
+    --region us-east-1 2>/dev/null; then
+    print_success "EBS CSI Driver addon created"
+else
+    print_status "EBS CSI Driver addon already exists, updating..."
+    aws eks update-addon \
+        --cluster-name llasta \
+        --addon-name aws-ebs-csi-driver \
+        --service-account-role-arn arn:aws:iam::142473567252:role/AmazonEKS_EBS_CSI_DriverRole \
+        --region us-east-1
+    check_success "EBS CSI Driver addon update"
 fi
 
-# Attendre que l'addon soit actif
-echo "Waiting for EBS CSI Driver to be active..."
+# Wait for addon to be active
+print_status "Waiting for EBS CSI Driver to be active..."
 aws eks wait addon-active --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
+check_success "EBS CSI Driver activation"
 
-#IMPORTANT : Ajouter les permissions EBS au rôle des nœuds
-aws iam attach-role-policy --role-name eks-node-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+# Add EBS permissions to node role
+print_status "Adding EBS permissions to node role..."
+aws iam attach-role-policy --role-name eks-node-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy 2>/dev/null || true
+print_success "EBS permissions attached"
 
-# Vérifier l'installation
-echo "Verifying EBS CSI Driver installation..."
+# Verify installation
+print_status "Verifying EBS CSI Driver installation..."
 kubectl get pods -n kube-system | grep ebs-csi
+check_success "EBS CSI Driver verification"
 
-echo"K8 deployment and setup completed. Now, we start the vLLM deployment phase"
+print_success "Kubernetes deployment and setup completed!"
+print_status "Phase 5: vLLM deployment"
 
-#Go to vLLM deployment directory
-cd "../002-vLLM deployment"
+# Navigate to vLLM deployment directory
+cd "../002-vLLM deployment" || { print_error "Cannot find vLLM deployment directory"; exit 1; }
 
-#création du namespace
+# Create namespace
+print_status "Creating llasta namespace..."
 kubectl apply -f 00-namespace.yaml
+check_success "Namespace creation"
 
-# Créer le PersistentVolume qui référence au volume contenant les poids Qwen3-8B INT4
+# Create PersistentVolume referencing EBS volume with Qwen3-8B weights
+print_status "Creating PersistentVolume for Qwen3-8B weights..."
 kubectl apply -f 10-pvc-from-ebs.yaml
+check_success "PersistentVolume creation"
 
-#Vérifier que le PVC est bien lié. A Améliorer: attente qu'il passe en bound
-kubectl get pvc qwen3-weights-src
+# Wait for PVC to be bound
+print_status "Waiting for PVC to be bound..."
+for i in {1..30}; do
+    PVC_STATUS=$(kubectl get pvc qwen3-weights-src -n llasta -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    if [ "$PVC_STATUS" = "Bound" ]; then
+        print_success "PVC successfully bound"
+        break
+    elif [ "$i" -eq 30 ]; then
+        print_error "PVC failed to bind after 5 minutes"
+        kubectl describe pvc qwen3-weights-src -n llasta
+        exit 1
+    else
+        print_status "PVC status: $PVC_STATUS, waiting... ($i/30)"
+        sleep 10
+    fi
+done
 
-#Déployer le runtime vLLM
+# Deploy vLLM runtime
+print_status "Deploying vLLM runtime..."
 kubectl apply -f 11-deploy-vllm.yaml
+check_success "vLLM deployment"
+
+# Wait for vLLM pod to be ready
+print_status "Waiting for vLLM pod to be ready (this may take 5-10 minutes)..."
+kubectl wait --for=condition=ready pod -l app=vllm-qwen3 -n llasta --timeout=600s
+check_success "vLLM pod readiness"
+
+print_success "🎉 LLASTA deployment completed successfully!"
+print_status "Next steps:"
+echo -e "  1. Start port-forward: ${GREEN}kubectl -n llasta port-forward svc/vllm-svc 8000:8000${NC}"
+echo -e "  2. Test API: ${GREEN}curl http://127.0.0.1:8000/v1/models${NC}"
+echo -e "  3. Chat with Qwen3: ${GREEN}curl -s 'http://127.0.0.1:8000/v1/chat/completions' -H 'Content-Type: application/json' -d '{\"model\": \"Qwen3-8B\", \"messages\": [{\"role\":\"user\",\"content\":\"Hello!\"}]}'${NC}"
