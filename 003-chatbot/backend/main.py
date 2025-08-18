@@ -19,10 +19,16 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
+# Configuration serveur backend
+APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
+APP_PORT = int(os.getenv("APP_PORT", "8080"))
+
 # Configuration - Variables d'environnement avec valeurs par défaut pour les tests locaux
-VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000")  # Pour test local
+# IMPORTANT: VLLM_BASE_URL doit pointer vers le service vLLM (par défaut port-forward 8000)
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000")  # Pour test local vers vLLM
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "dummy-key")  # vLLM n'en a pas besoin généralement
-VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "/models/Qwen3-8B")  # Nom du modèle dans vLLM
+VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen3-8B")  # Nom du modèle dans vLLM
+
 
 # Modèles Pydantic pour la validation des données
 class ChatMessage(BaseModel):
@@ -123,10 +129,27 @@ async def chat_endpoint(request: ChatRequest):
         StreamingResponse ou ChatResponse selon le mode demandé
     """
     try:
+        # Construire les messages en appliquant le flag no_think au dernier message user
+        # 1) Trouver l'index du dernier message utilisateur
+        last_user_idx = None
+        for i in range(len(request.messages) - 1, -1, -1):
+            if request.messages[i].role == "user":
+                last_user_idx = i
+                break
+
+        # 2) Construire la liste de messages pour vLLM en ajoutant " /no_think" si nécessaire
+        messages_for_vllm = []
+        for idx, msg in enumerate(request.messages):
+            content = msg.content
+            if idx == last_user_idx and isinstance(content, str):
+                if "/no_think" not in content:
+                    content = content.rstrip() + " /no_think"
+            messages_for_vllm.append({"role": msg.role, "content": content})
+
         # Préparation de la requête pour vLLM (format OpenAI compatible)
         vllm_request = {
             "model": VLLM_MODEL_NAME,  # Nom du modèle configuré via variable d'environnement
-            "messages": [msg.dict() for msg in request.messages],
+            "messages": messages_for_vllm,
             "stream": request.stream,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
@@ -231,12 +254,12 @@ if __name__ == "__main__":
     print("🚀 Démarrage du serveur LLASTA Chatbot Backend...")
     print(f"📡 vLLM URL: {VLLM_BASE_URL}")
     print(f"🤖 Modèle: {VLLM_MODEL_NAME}")
-    print("🌐 Interface disponible sur: http://localhost:8080")
+    print(f"🌐 Interface disponible sur: http://{APP_HOST}:{APP_PORT}")
     
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8080,
+        host=APP_HOST,
+        port=APP_PORT,
         reload=True,  # Rechargement automatique en développement
         log_level="info"
     )

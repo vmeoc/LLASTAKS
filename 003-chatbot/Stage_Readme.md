@@ -75,3 +75,10 @@
 ## K8s Manifests Needed
 
 * `chatbot.yaml` (combined Deployment, Service, ConfigMap, Secret, Ingress in one file)
+
+
+## To use the chatbot
+
+1. For testing in local
+uv venv
+uv run main.py

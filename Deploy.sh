@@ -5,6 +5,10 @@
 set -e  # Exit on any error
 set -u  # Exit on undefined variables
 
+# Always run from the script directory so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -43,7 +47,25 @@ print_status "Starting LLASTA deployment..."
 print_status "Phase 1: Infrastructure deployment with Terraform"
 
 # Navigate to Kubernetes deployment directory
-cd "K8 deployment" || { print_error "Cannot find K8 deployment directory"; exit 1; }
+cd "000-K8 deployment" || { print_error "Cannot find K8 deployment directory"; exit 1; }
+
+# Initialize Terraform (needed before state operations)
+print_status "Initializing Terraform..."
+terraform init -input=false -upgrade=false
+check_success "Terraform init"
+
+# Preflight: ensure existing IAM role for EBS CSI is imported into Terraform state
+print_status "Preflight: syncing existing IAM role (EBS CSI) to Terraform state if needed..."
+if aws iam get-role --role-name AmazonEKS_EBS_CSI_DriverRole >/dev/null 2>&1; then
+    if ! terraform state show aws_iam_role.ebs_csi_driver_role >/dev/null 2>&1; then
+        print_status "Importing existing role AmazonEKS_EBS_CSI_DriverRole into Terraform state..."
+        terraform import aws_iam_role.ebs_csi_driver_role AmazonEKS_EBS_CSI_DriverRole || true
+    else
+        print_status "IAM role already tracked in Terraform state."
+    fi
+else
+    print_status "IAM role AmazonEKS_EBS_CSI_DriverRole not found; Terraform will create it."
+fi
 
 # Deploy infrastructure
 print_status "Applying Terraform configuration..."
@@ -179,6 +201,6 @@ check_success "vLLM pod readiness"
 
 print_success "🎉 LLASTA deployment completed successfully!"
 print_status "Next steps:"
-echo -e "  1. Start port-forward: ${GREEN}kubectl -n llasta port-forward svc/vllm-svc 8000:8000${NC}"
+echo -e "  1. Start port-forward: ${GREEN}kubectl -n llasta port-forward svc/vllm 8000:8000${NC}"
 echo -e "  2. Test API: ${GREEN}curl http://127.0.0.1:8000/v1/models${NC}"
 echo -e "  3. Chat with Qwen3: ${GREEN}curl -s 'http://127.0.0.1:8000/v1/chat/completions' -H 'Content-Type: application/json' -d '{\"model\": \"Qwen3-8B\", \"messages\": [{\"role\":\"user\",\"content\":\"Hello!\"}]}'${NC}"

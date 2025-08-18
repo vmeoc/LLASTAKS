@@ -16,21 +16,36 @@ data "aws_subnet" "by_id" {
   id       = each.value
 }
 
-# Keep only subnets in EKS-supported AZs (avoid us-east-1e)
+# Compute subnets for the cluster (multi-AZ) and for the nodegroup (single AZ us-east-1d)
 locals {
-  cluster_name   = "llasta"
-  supported_azs  = ["us-east-1d"]  # Force une seule AZ pour éviter les problèmes EBS
+  cluster_name = "llasta"
 
-  filtered_subnet_ids = compact([
-    for s in values(data.aws_subnet.by_id) :
-    contains(local.supported_azs, s.availability_zone) ? s.id : null
-  ])
+  # All AZs available in default VPC
+  azs = distinct([for s in values(data.aws_subnet.by_id) : s.availability_zone])
+
+  # Prefer to place the GPU node group in us-east-1d (EBS volume resides there)
+  ebs_az = contains(local.azs, "us-east-1d") ? "us-east-1d" : (length(local.azs) > 0 ? local.azs[0] : null)
+
+  # Pick another AZ for the control plane requirement (EKS needs ≥ 2 AZs)
+  other_azs     = [for az in local.azs : az if az != local.ebs_az]
+  secondary_az  = length(local.other_azs) > 0 ? local.other_azs[0] : null
+  selected_azs  = compact([local.ebs_az, local.secondary_az])
+
+  # Cluster subnets span at least two AZs (includes us-east-1d when present)
+  cluster_subnet_ids = [
+    for s in values(data.aws_subnet.by_id) : s.id if contains(local.selected_azs, s.availability_zone)
+  ]
+
+  # Node group subnets restricted to the EBS AZ to allow volume attachment
+  nodegroup_subnet_ids = [
+    for s in values(data.aws_subnet.by_id) : s.id if s.availability_zone == local.ebs_az
+  ]
 }
 
 # === REQUIRED TAGS on subnets for EKS Nodegroup ===
 # Tag each selected subnet so the node group can use them.
 resource "aws_ec2_tag" "subnet_cluster_shared" {
-  for_each    = toset(local.filtered_subnet_ids)
+  for_each    = toset(local.cluster_subnet_ids)
   resource_id = each.value
   key         = "kubernetes.io/cluster/${local.cluster_name}"
   value       = "shared"
@@ -38,7 +53,7 @@ resource "aws_ec2_tag" "subnet_cluster_shared" {
 
 # (Optional but good to have on public subnets; harmless if already present)
 resource "aws_ec2_tag" "subnet_elb" {
-  for_each    = toset(local.filtered_subnet_ids)
+  for_each    = toset(local.cluster_subnet_ids)
   resource_id = each.value
   key         = "kubernetes.io/role/elb"
   value       = "1"
@@ -75,7 +90,7 @@ resource "aws_eks_cluster" "this" {
   version  = "1.33"
 
   vpc_config {
-    subnet_ids = local.filtered_subnet_ids
+    subnet_ids = local.cluster_subnet_ids
   }
 
   depends_on = [
@@ -163,7 +178,7 @@ resource "aws_eks_node_group" "default" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "default"
   node_role_arn   = aws_iam_role.eks_node_role.arn
-  subnet_ids      = local.filtered_subnet_ids
+  subnet_ids      = local.nodegroup_subnet_ids
 
   scaling_config {
     desired_size = 1

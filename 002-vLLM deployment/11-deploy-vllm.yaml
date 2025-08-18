@@ -10,6 +10,7 @@ spec:
     metadata:
       labels: { app: vllm-qwen3 }
     spec:
+      enableServiceLinks: false
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
