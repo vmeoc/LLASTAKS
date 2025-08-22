@@ -15,32 +15,27 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: chatbot-config
-  namespace: default
+  namespace: llasta
   labels:
-    app: llasta-chatbot
+    app: chatbot
     component: config
 data:
   # URL du service vLLM (DNS interne Kubernetes)
   VLLM_BASE_URL: "http://vllm.llasta.svc.cluster.local:8000"
   
   # Configuration FastAPI
-  FASTAPI_HOST: "0.0.0.0"
-  FASTAPI_PORT: "8080"
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "8080"
   
-  # Configuration du modèle
-  MODEL_NAME: "Qwen3-8B"
-  MAX_TOKENS: "1000"
-  TEMPERATURE: "0.7"
-
 ---
 # Secret pour les clés API (optionnel, vLLM n'en a généralement pas besoin)
 apiVersion: v1
 kind: Secret
 metadata:
   name: chatbot-secrets
-  namespace: default
+  namespace: llasta
   labels:
-    app: llasta-chatbot
+    app: chatbot
     component: secrets
 type: Opaque
 data:
@@ -52,10 +47,10 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: llasta-chatbot
-  namespace: default
+  name: chatbot
+  namespace: llasta
   labels:
-    app: llasta-chatbot
+    app: chatbot
     component: backend
 spec:
   # Une seule réplique pour commencer (peut être augmenté plus tard)
@@ -63,19 +58,19 @@ spec:
   
   selector:
     matchLabels:
-      app: llasta-chatbot
+      app: chatbot
       component: backend
   
   template:
     metadata:
       labels:
-        app: llasta-chatbot
+        app: chatbot
         component: backend
     spec:
       containers:
       - name: chatbot-backend
         # Image à construire et pousser vers ECR ou Docker Hub
-        image: llasta/chatbot-backend:latest
+        image: vmeoc/chatbot:v1
         
         ports:
         - containerPort: 8080
@@ -96,17 +91,17 @@ spec:
               name: chatbot-secrets
               key: VLLM_API_KEY
         
-        - name: FASTAPI_HOST
+        - name: APP_HOST
           valueFrom:
             configMapKeyRef:
               name: chatbot-config
-              key: FASTAPI_HOST
+              key: APP_HOST
         
-        - name: FASTAPI_PORT
+        - name: APP_PORT
           valueFrom:
             configMapKeyRef:
               name: chatbot-config
-              key: FASTAPI_PORT
+              key: APP_PORT
         
         # Health checks pour Kubernetes
         livenessProbe:
@@ -156,10 +151,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: llasta-chatbot
-  namespace: default
+  name: chatbot
+  namespace: llasta
   labels:
-    app: llasta-chatbot
+    app: chatbot
     component: service
 spec:
   type: ClusterIP  # Accès interne seulement
@@ -171,7 +166,7 @@ spec:
     name: http
   
   selector:
-    app: llasta-chatbot
+    app: chatbot
     component: backend
 
 ---
@@ -179,10 +174,10 @@ spec:
 # apiVersion: networking.k8s.io/v1
 # kind: Ingress
 # metadata:
-#   name: llasta-chatbot-ingress
+#   name: chatbot-ingress
 #   namespace: default
 #   labels:
-#     app: llasta-chatbot
+#     app: chatbot
 #     component: ingress
 #   annotations:
 #     # Annotations pour votre ingress controller (nginx, traefik, etc.)
@@ -197,7 +192,7 @@ spec:
 #         pathType: Prefix
 #         backend:
 #           service:
-#             name: llasta-chatbot
+#             name: chatbot
 #             port:
 #               number: 8080
 
@@ -206,16 +201,16 @@ spec:
 # apiVersion: autoscaling/v2
 # kind: HorizontalPodAutoscaler
 # metadata:
-#   name: llasta-chatbot-hpa
+#   name: chatbot-hpa
 #   namespace: default
 #   labels:
-#     app: llasta-chatbot
+#     app: chatbot
 #     component: autoscaler
 # spec:
 #   scaleTargetRef:
 #     apiVersion: apps/v1
 #     kind: Deployment
-#     name: llasta-chatbot
+#     name: chatbot
 #   
 #   minReplicas: 1
 #   maxReplicas: 5

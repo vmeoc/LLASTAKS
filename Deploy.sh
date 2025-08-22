@@ -121,40 +121,13 @@ if [ "$NODE_AZ" != "us-east-1d" ]; then
   print_warning "Ensure your EBS volume is also in $NODE_AZ"
 fi
 
-print_status "Phase 4: Installing EBS CSI Driver addon"
+print_status "Phase 4: EBS CSI Driver addon (managed by Terraform)"
+print_status "Skipping CLI-based addon management. Terraform handles creation/update."
 
-# Install EBS CSI driver with Service Account
-print_status "Installing EBS CSI Driver addon..."
-if aws eks create-addon \
-    --cluster-name llasta \
-    --addon-name aws-ebs-csi-driver \
-    --service-account-role-arn arn:aws:iam::142473567252:role/AmazonEKS_EBS_CSI_DriverRole \
-    --region us-east-1 2>/dev/null; then
-    print_success "EBS CSI Driver addon created"
-else
-    print_status "EBS CSI Driver addon already exists, updating..."
-    aws eks update-addon \
-        --cluster-name llasta \
-        --addon-name aws-ebs-csi-driver \
-        --service-account-role-arn arn:aws:iam::142473567252:role/AmazonEKS_EBS_CSI_DriverRole \
-        --region us-east-1
-    check_success "EBS CSI Driver addon update"
-fi
-
-# Wait for addon to be active
-print_status "Waiting for EBS CSI Driver to be active..."
-aws eks wait addon-active --cluster-name llasta --addon-name aws-ebs-csi-driver --region us-east-1
-check_success "EBS CSI Driver activation"
-
-# Add EBS permissions to node role
-print_status "Adding EBS permissions to node role..."
-aws iam attach-role-policy --role-name eks-node-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy 2>/dev/null || true
-print_success "EBS permissions attached"
-
-# Verify installation
+# Optional verification
 print_status "Verifying EBS CSI Driver installation..."
-kubectl get pods -n kube-system | grep ebs-csi
-check_success "EBS CSI Driver verification"
+kubectl get pods -n kube-system | grep ebs-csi || true
+print_success "EBS CSI Driver verification (best-effort)"
 
 print_success "Kubernetes deployment and setup completed!"
 print_status "Phase 5: vLLM deployment"

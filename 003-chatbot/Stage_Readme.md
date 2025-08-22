@@ -82,3 +82,9 @@
 1. For testing in local
 uv venv
 uv run main.py
+
+2. For k8s deployment
+kubectl apply -f k8s/chatbot.yaml
+kubectl -n llasta port-forward svc/chatbot 8080:8080
+dans le navigateur http://localhost:8080
+

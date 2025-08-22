@@ -66,7 +66,7 @@ The BASICS:
 
 The chatbot app:
 
-- [ ] create the custom chatbot code: Discussion: https://chatgpt.com/c/689c1861-a6b0-8329-961c-f1ae5dbbeac8
+- [X] create the custom chatbot code: Discussion: https://chatgpt.com/c/689c1861-a6b0-8329-961c-f1ae5dbbeac8
 - [ ] Host the chatbot code in serverless or K8
 - [ ] Secure the outside connection to the chatbot code
 - [ ] Automatically deploy it

@@ -21,15 +21,15 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 WORKDIR /app
 
 # Copier les dépendances et les installer
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copier le code source
-COPY main.py .
+COPY backend/main.py .
 
 # Créer le répertoire frontend et copier les fichiers statiques
-COPY ../frontend ./frontend
+COPY frontend ./frontend
 
 # Changer la propriété des fichiers
 RUN chown -R appuser:appuser /app

@@ -139,6 +139,25 @@ resource "aws_iam_role_policy_attachment" "ebs_csi_driver_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
+# === EKS Addon: aws-ebs-csi-driver (managed via Terraform) ===
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name             = aws_eks_cluster.this.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.ebs_csi_driver_role.arn
+  addon_version = "v1.47.0-eksbuild.1"
+
+  # Optionally pin a version
+  # addon_version = "v1.x.x-eksbuild.x"
+
+  depends_on = [
+    aws_iam_openid_connect_provider.eks_oidc,
+    aws_iam_role.ebs_csi_driver_role,
+    aws_iam_role_policy_attachment.ebs_csi_driver_policy,
+    # Ensure nodes exist before installing addon to avoid long creation waits
+    aws_eks_node_group.default,
+  ]
+}
+
 # === IAM for EKS Nodes ===
 resource "aws_iam_role" "eks_node_role" {
   name = "eks-node-role"
