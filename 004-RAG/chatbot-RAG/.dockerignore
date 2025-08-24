@@ -1,0 +1,29 @@
+# Ignore VCS
+.git
+.gitignore
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.venv
+venv
+.env
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+
+# Node (if any frontend tooling used later)
+node_modules
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml
+
+# Caches
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.cache/

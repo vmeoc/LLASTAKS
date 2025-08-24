@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faiss-wrap
+  namespace: llasta
+  labels:
+    app: faiss-wrap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: faiss-wrap
+  template:
+    metadata:
+      labels:
+        app: faiss-wrap
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: faiss-wrap
+          image: vmeoc/faiss-wrap:v2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+          env:
+            - name: DATA_DIR
+              value: /data
+            - name: HF_HOME
+              value: /models/hub
+            - name: EMBED_MODEL
+              value: BAAI/bge-m3
+          volumeMounts:
+            - name: faiss-data
+              mountPath: /data
+            - name: bge-models
+              mountPath: /models/hub
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: faiss-data
+          persistentVolumeClaim:
+            claimName: llasta-faiss-data-pvc
+        - name: bge-models
+          persistentVolumeClaim:
+            claimName: llasta-bge-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faiss-wrap
+  namespace: llasta
+  labels:
+    app: faiss-wrap
+spec:
+  type: ClusterIP
+  selector:
+    app: faiss-wrap
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000

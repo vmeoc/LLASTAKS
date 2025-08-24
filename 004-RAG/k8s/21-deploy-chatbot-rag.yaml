@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatbot-rag
+  namespace: llasta
+  labels:
+    app: chatbot-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatbot-rag
+  template:
+    metadata:
+      labels:
+        app: chatbot-rag
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: chatbot-rag
+          image: vmeoc/chatbot-rag:v2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_HOST
+              value: 0.0.0.0
+            - name: APP_PORT
+              value: "8080"
+            - name: VLLM_BASE_URL
+              value: http://vllm.llasta.svc.cluster.local:8000  # corrected FQDN for vLLM service
+            - name: VLLM_MODEL_NAME
+              value: Qwen3-8B
+            - name: FAISS_WRAP_URL
+              value: http://faiss-wrap.llasta.svc.cluster.local:9000
+          volumeMounts:
+            - name: bge-models
+              mountPath: /models/hub
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: bge-models
+          persistentVolumeClaim:
+            claimName: llasta-bge-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot-rag
+  namespace: llasta
+  labels:
+    app: chatbot-rag
+spec:
+  type: ClusterIP
+  selector:
+    app: chatbot-rag
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

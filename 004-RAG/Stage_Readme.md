@@ -7,8 +7,8 @@ Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B 
 ## Logical architecture
 
 * **Chatbot (FastAPI)**
-  * Need to work with and without RAG (switch button in chatbot interface to enable or disable RAG)
-  * Performs **query cleaning** with Qwen3.
+  * Need to work with and without RAG
+  * Performs **query cleaning** with Qwen3 (optional)
   * Calls **faiss‑wrap** (internal service) to retrieve **text + metadata** for the top‑k passages.
   * Runs a local **reranker** (cross‑encoder, bge‑reranker‑v2‑m3) → keeps the best m passages.
   * **Stuffing** (concat) of the m passages + user prompt → vLLM (Qwen3‑8B) → answer with **citations**.
@@ -32,7 +32,7 @@ Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B 
 
 ---
 
-## Ingestion flow (RAG Manager)
+## Ingestion flow (ingest.py)
 
 1. **Extract** text from PDFs (remove headers/footers, page numbers).
 2. **Clean**: normalize (whitespace, encoding, casing, stray punctuation), **filter** (empty/boilerplate pages), **dedupe** (hash to avoid duplicates).
@@ -108,28 +108,20 @@ Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B 
 * **Embedding**: **bge‑m3** (multilingual FR/EN), CPU OK.
 * **Reranker**: **bge‑reranker‑v2‑m3** (cross‑encoder), CPU OK.
 
-**Model cache**
-
-* Set `HF_HOME=/models/hub` to reuse weights.
-* Pre‑download both models with a warm‑cache job.
-* Options: (a) shared **/models** PVC on the **same node** (RWO); (b) **bake** CPU images with weights; (c) EFS (RWX) if cross‑node sharing.
-
 ---
 
 ## K8s – minimum objects
 
-* **faiss‑wrap Deployment** (1 CPU pod) + **PVC `/data`** (EBS) + **PVC `/models`** (optional); ClusterIP Service.
-* **Chatbot Deployment** (1 CPU pod) – mounts `/models` if not baked; ClusterIP Service.
-* **vLLM Deployment** (1 GPU pod) – mounts `/models` if sharing cache.
-* **RAG Manager**: script from your laptop (port‑forward) or ad‑hoc **Job** for ingestion.
+* **faiss‑wrap Deployment** (1 CPU pod) + **PVC `/data`** (EBS) + **PVC `/models`** for BGE model caching; ClusterIP Service.
+* **Chatbot Deployment** (1 CPU pod) – mounts `/models` for BGE model caching from ebs to be created; ClusterIP Service.
+* **vLLM Deployment** (1 GPU pod) – mounts `/models` for Qwen2 weight models from  already created ebs available through pvc qwen3-weights-src.
+* **RAG Manager**: script from your laptop (port‑forward).
 
-**EBS RWO note**
+**EBS RWO note for BGE model caching**
 
 * EBS is **RWO** (one node in R/W). To share `/models`:
 
-  * Co‑locate pods on **the same node** (affinity) and mount the same PVC; or
-  * Use **EFS** (RWX); or
-  * **Bake** weights into CPU images (simple for tests).
+  * Co‑locate pods on **the same node** (affinity not needed since there's only 1 node) and mount the same PVC
 
 ---
 
@@ -169,9 +161,95 @@ Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B 
 
 ---
 
-## Test data (no PII)
+## Step-by-step setup (Stage RAG)
 
-* Generate synthetic PDFs with ChatGPT (or Faker + HTML/CSS → PDF) for 10 statements.
+Follow these steps to deploy the RAG components in EKS.
+
+1) **Prerequisites**
+
+* Ensure EBS volumes exist in the same AZ as your node group and update `004-RAG/.env` with:
+  * `VOLUME_FAISS_ID`
+  * `VOLUME_MODELS_ID`
+  * `AZ`
+
+2) **Create namespace (if not already present)**
+
+```bash
+kubectl get ns llasta || kubectl create namespace llasta
+```
+
+3) **Apply storage (PV/PVC)**
+
+```bash
+kubectl apply -f 004-RAG/k8s/10-pv-pvc-models.yaml
+kubectl apply -f 004-RAG/k8s/11-pv-pvc-faiss.yaml
+kubectl -n llasta get pvc
+```
+
+3b) **Warm models cache**
+
+Pre-download BGE models into the models PVC so pods start faster.
+
+```bash
+kubectl apply -f 004-RAG/k8s/15-job-warm-bge-models.yaml
+kubectl -n llasta logs job/warm-bge-models -f
+```
+Expected logs should list files under `/models/hub` (confirming the PVC is populated).
+
+4) **Deploy services**
+
+Images used:
+
+* faiss-wrap: `vmeoc/faiss-wrap:v1`
+* chatbot-rag: `vmeoc/chatbot-rag:v1`
+
+```bash
+kubectl apply -f 004-RAG/k8s/20-deploy-faiss-wrap.yaml
+kubectl apply -f 004-RAG/k8s/21-deploy-chatbot-rag.yaml
+kubectl -n llasta get pods -w
+```
+
+5) **Validate health**
+After connecting through port-forward:
+
+```bash
+# faiss-wrap
+kubectl -n llasta port-forward deploy/faiss-wrap 9000:9000 &
+curl http://localhost:9000/health
+
+# chatbot-rag
+kubectl -n llasta port-forward deploy/chatbot-rag 8080:8080 &
+curl http://localhost:8080/health
+```
+
+6) **Ingest real data (RAG Manager)**
+
+Use `004-RAG/ingest/ingest.py` to read PDFs from S3 and `POST /upsert` to `faiss-wrap` (port-forward as above). Verify `/health` items count grows and chatbot answers include citations.
+
+```bash
+kubectl -n llasta port-forward svc/faiss-wrap 19000:9000 
+
+uv run ingest.py   --faiss-wrap-url http://localhost:19000   --s3-input s3://llasta-rag/PDF-Financial/   --s3-manifest s3://llasta-rag/manifests/   --batch-size 8   --max-parallel 4   --http-timeout 300   --preview-chars 120
+```
+
+7) **Smoke test retrieval**
+
+After connecting through port-forward:
+```bash
+curl -X POST http://localhost:9000/upsert \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"id":"doc1#p1","text":"Q1 revenue was $10M.","metadata":{"source":"finance.pdf","page":1}}]}'
+
+curl -X POST http://localhost:9000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What was Q1 revenue?","top_k":3}'
+```
+
+7) **Open the chatbot**
+
+Open http://localhost:8080 and ask about Q1 revenue. The backend will inject retrieved context when available.
+
+
 
 ---
 
@@ -180,21 +258,3 @@ Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B 
 * Chunk: **1 page = 1 chunk** (overlap 0); k=20; m=5; refusal threshold.
 * FAISS index: **exhaustive V1** with `IndexFlatIP` (if vectors are normalized) or `IndexFlatL2`.
 * Final Qwen3 context: 1.5k–2.5k tokens of passages.
-
----
-
-## Implementation plan
-
-1. **faiss‑wrap**: FastAPI + FAISS + bge‑m3; mount `/data` (PVC); expose `/metrics`; Service.
-2. **RAG Manager**: ingest script (S3 → PDF → clean → page‑chunks → `/upsert`) + `manifest.parquet` (S3).
-3. **Chatbot**: query‑cleaning → `/search` (k=20) → **rerank** (m=5) → **stuff** → vLLM → citations.
-4. **Co‑location** (if sharing `/models`): use podAffinity to place pods on the same node.
-5. **Tests**: 10 synthetic PDFs; check simple Recall\@k (offline) + latencies.
-
----
-
-## Mini FAQ
-
-* **Why dedupe?** Avoids indexing the same content multiple times (headers/footers/duplicates). Cleaner index, better results.
-* **Where is `manifest.parquet` used?** Offline: audit, rebuild, run‑to‑run diff, and model traceability (`embedding_model/dim/ts/source_uri…`).
-* **Who turns vectors → text?** Nobody. We **store** the text and return it as‑is; vectors are only used for retrieval.

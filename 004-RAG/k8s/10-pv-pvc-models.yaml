@@ -1,0 +1,51 @@
+# PV/PVC for HuggingFace models cache (/models/hub)
+# Binds to pre-created EBS volume in AZ us-east-1d with Retain policy.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: llasta-bge-models-pv
+  labels:
+    app: llasta
+    type: models-cache
+spec:
+  capacity:
+    storage: 200Gi  # advisory; actual EBS size governs
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gp3
+  claimRef:
+    namespace: llasta
+    name: llasta-bge-models-pvc
+  csi:
+    driver: ebs.csi.aws.com
+    volumeHandle: vol-05c7a6301bbe8f741  # from 004-RAG/.env VOLUME_MODELS_ID
+    fsType: ext4
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - us-east-1d  # from 004-RAG/.env AZ
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llasta-bge-models-pvc
+  namespace: llasta
+  labels:
+    app: llasta
+    type: models-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 200Gi
+  selector:
+    matchLabels:
+      type: models-cache

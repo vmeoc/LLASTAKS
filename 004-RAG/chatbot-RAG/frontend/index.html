@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLASTA Chatbot-RAG - LLM App Stack</title>
+    <style>
+        /* Copied from base chatbot with minor title change */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            height: 100vh; display: flex; justify-content: center; align-items: center;
+        }
+        .chat-container { width: 90%; max-width: 800px; height: 90vh; background: rgba(255,255,255,0.95);
+            border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
+        .chat-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; position: relative; }
+        .chat-header h1 { font-size: 1.5rem; margin-bottom: 5px; }
+        .chat-header p { font-size: 0.9rem; opacity: 0.9; }
+        .status-indicator { position: absolute; top: 20px; right: 20px; width: 12px; height: 12px; border-radius: 50%; background: #4CAF50; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%{opacity:1;} 50%{opacity:.5;} 100%{opacity:1;} }
+        .chat-messages { flex:1; padding:20px; overflow-y:auto; background:#f8f9fa; }
+        .message { margin-bottom:15px; display:flex; align-items:flex-start; }
+        .message.user { justify-content:flex-end; }
+        .message-content { max-width:70%; padding:12px 16px; border-radius:18px; word-wrap:break-word; line-height:1.4; }
+        .message.user .message-content { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; border-bottom-right-radius:4px; }
+        .message.assistant .message-content { background:white; color:#333; border:1px solid #e1e5e9; border-bottom-left-radius:4px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
+        .message-avatar { width:32px; height:32px; border-radius:50%; margin:0 10px; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:14px; }
+        .message.user .message-avatar { background:#667eea; color:white; order:1; }
+        .message.assistant .message-avatar { background:#4CAF50; color:white; }
+        .typing-indicator { display:none; padding:12px 16px; background:white; border-radius:18px; border-bottom-left-radius:4px; border:1px solid #e1e5e9; max-width:70%; }
+        .typing-dots { display:flex; gap:4px; }
+        .typing-dots span { width:8px; height:8px; border-radius:50%; background:#999; animation: typing 1.4s infinite ease-in-out; }
+        .typing-dots span:nth-child(1){animation-delay:-.32s;} .typing-dots span:nth-child(2){animation-delay:-.16s;}
+        @keyframes typing { 0%,80%,100%{transform:scale(.8);opacity:.5;} 40%{transform:scale(1);opacity:1;} }
+        .chat-input-container { padding:20px; background:white; border-top:1px solid #e1e5e9; }
+        .chat-input-wrapper { display:flex; gap:10px; align-items:flex-end; }
+        .chat-input { flex:1; min-height:50px; max-height:120px; padding:12px 16px; border:2px solid #e1e5e9; border-radius:25px; font-size:16px; font-family:inherit; resize:none; outline:none; transition:border-color .3s ease; }
+        .chat-input:focus { border-color:#667eea; }
+        .chat-button { padding:12px 20px; border:none; border-radius:25px; font-size:16px; font-weight:600; cursor:pointer; transition:all .3s ease; outline:none; }
+        .send-button { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; }
+        .send-button:hover:not(:disabled){ transform:translateY(-2px); box-shadow:0 4px 12px rgba(102,126,234,0.4);} 
+        .send-button:disabled { opacity:.6; cursor:not-allowed; }
+        .reset-button { background:#ff6b6b; color:white; }
+        .reset-button:hover { background:#ff5252; transform:translateY(-2px); }
+        .error-message { background:#ffebee; color:#c62828; padding:12px 16px; border-radius:8px; margin:10px 0; border-left:4px solid #c62828; }
+        @media (max-width:768px){ .chat-container{ width:95%; height:95vh; border-radius:10px;} .message-content{ max-width:85%; } .chat-input-wrapper{ flex-direction:column; gap:10px;} .chat-button{ width:100%; } }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <h1>🧠 LLASTA Chatbot-RAG</h1>
+            <p>Qwen3-8B via vLLM • Retrieval-Augmented Generation</p>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="message assistant">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    Bonjour ! Ceci est la version RAG du chatbot LLASTA. Posez votre question et nous utiliserons un contexte pertinent si disponible. 🚀
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <textarea id="chatInput" class="chat-input" placeholder="Tapez votre message ici..." rows="1"></textarea>
+                <button id="sendButton" class="chat-button send-button">Envoyer 📤</button>
+                <button id="resetButton" class="chat-button reset-button">Reset 🔄</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class LLASTAChatbotRAG {
+            constructor() {
+                this.chatMessages = document.getElementById('chatMessages');
+                this.chatInput = document.getElementById('chatInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.resetButton = document.getElementById('resetButton');
+                this.statusIndicator = document.getElementById('statusIndicator');
+                this.conversation = [];
+                this.isTyping = false;
+                this.initializeEventListeners();
+                this.checkBackendHealth();
+            }
+            initializeEventListeners() {
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.resetButton.addEventListener('click', () => this.resetConversation());
+                this.chatInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); }
+                });
+                this.chatInput.addEventListener('input', () => {
+                    this.chatInput.style.height = 'auto';
+                    this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 120) + 'px';
+                });
+            }
+            async checkBackendHealth() {
+                try {
+                    const response = await fetch('/health');
+                    const health = await response.json();
+                    this.setStatus(health.status === 'healthy' ? 'healthy' : 'warning');
+                    console.log('Health:', health);
+                } catch (e) {
+                    this.setStatus('error');
+                    this.showError('Impossible de se connecter au backend.');
+                }
+            }
+            setStatus(status) {
+                const colors = { healthy: '#4CAF50', warning: '#FF9800', error: '#F44336' };
+                this.statusIndicator.style.background = colors[status] || colors.error;
+            }
+            async sendMessage() {
+                const message = this.chatInput.value.trim();
+                if (!message || this.isTyping) return;
+                this.addMessage('user', message);
+                this.conversation.push({ role: 'user', content: message });
+                this.chatInput.value = '';
+                this.chatInput.style.height = 'auto';
+                this.setTyping(true);
+                try {
+                    const response = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ messages: this.conversation, stream: false, max_tokens: 1000, temperature: 0.7 })
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const result = await response.json();
+                    if (result.message && result.message.content) {
+                        this.addMessage('assistant', result.message.content);
+                        this.conversation.push({ role: 'assistant', content: result.message.content });
+                    } else { throw new Error('Format réponse invalide'); }
+                } catch (err) {
+                    this.showError(`Erreur: ${err.message}`);
+                } finally { this.setTyping(false); }
+            }
+            addMessage(role, content) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}`;
+                const avatar = role === 'user' ? '👤' : '🤖';
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">${avatar}</div>
+                    <div class="message-content">${content}</div>
+                `;
+                this.chatMessages.appendChild(messageDiv);
+                this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+                return messageDiv;
+            }
+            setTyping(isTyping) {
+                this.isTyping = isTyping;
+                this.sendButton.disabled = isTyping;
+                this.sendButton.textContent = isTyping ? 'En cours... ⏳' : 'Envoyer 📤';
+                let indicator = document.getElementById('typing-indicator-unique');
+                if (isTyping && !indicator) {
+                    indicator = document.createElement('div');
+                    indicator.id = 'typing-indicator-unique';
+                    indicator.className = 'message assistant';
+                    indicator.innerHTML = `
+                        <div class="message-avatar">🤖</div>
+                        <div class="typing-indicator"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+                    this.chatMessages.appendChild(indicator);
+                    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+                } else if (!isTyping && indicator) { indicator.remove(); }
+            }
+            resetConversation() {
+                if (confirm('Effacer toute la conversation ?')) {
+                    this.conversation = [];
+                    const messages = this.chatMessages.querySelectorAll('.message');
+                    for (let i = 1; i < messages.length; i++) messages[i].remove();
+                }
+            }
+            showError(message) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = message;
+                this.chatMessages.appendChild(errorDiv);
+                this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+                setTimeout(() => errorDiv.remove(), 5000);
+            }
+        }
+        document.addEventListener('DOMContentLoaded', () => { window.llastaChatbotRAG = new LLASTAChatbotRAG(); });
+    </script>
+</body>
+</html>

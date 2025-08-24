@@ -1,0 +1,10 @@
+# faiss-wrap service dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sentence-transformers==2.6.1
+faiss-cpu==1.8.0.post1
+numpy==1.26.4
+pandas==2.2.2
+pyarrow==16.1.0
+prometheus-client==0.20.0
+pydantic==2.5.0

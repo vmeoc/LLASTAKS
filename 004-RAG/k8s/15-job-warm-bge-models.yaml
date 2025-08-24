@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: warm-bge-models
+  namespace: llasta
+  labels:
+    app: warm-bge-models
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: warm-bge-models
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: warmer
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HF_HOME
+              value: /models/hub
+          command: ["/bin/sh","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              python -m pip install --no-cache-dir -q "huggingface_hub==0.23.0"
+              python - <<'PY'
+              from huggingface_hub import snapshot_download
+              import os
+              cache=os.environ.get('HF_HOME','/models/hub')
+              for repo in [
+                  'BAAI/bge-m3',
+                  'BAAI/bge-reranker-v2-m3',
+              ]:
+                  print(f"Downloading {repo} to {cache}...")
+                  snapshot_download(repo_id=repo, cache_dir=cache)
+              print("Warm cache completed.")
+              PY
+              echo "==> Listing /models/hub"
+              ls -la /models/hub
+              echo "==> Disk usage under /models/hub (depth 2)"
+              du -h --max-depth=2 /models/hub || true
+              echo "==> Sample of files (first 200)"
+              find /models/hub -maxdepth 3 -type f | head -n 200
+          volumeMounts:
+            - name: bge-models
+              mountPath: /models/hub
+      volumes:
+        - name: bge-models
+          persistentVolumeClaim:
+            claimName: llasta-bge-models-pvc

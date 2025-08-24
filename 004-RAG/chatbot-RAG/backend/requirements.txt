@@ -1,0 +1,12 @@
+# LLASTA Chatbot-RAG Backend - Dépendances Python
+#
+# FastAPI: Framework web pour notre API backend
+# uvicorn: Serveur ASGI
+# httpx: Client HTTP asynchrone (vLLM et faiss-wrap)
+# pydantic: Validation et sérialisation des schémas
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+httpx==0.25.2
+pydantic==2.5.0
+python-multipart==0.0.6  # Pour le support des formulaires
