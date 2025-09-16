@@ -107,6 +107,22 @@ python main.py
   - `RAG_TOP_K` (default `5`)
   - `RAG_MAX_CONTEXT_CHARS` (default `4000`)
 
+ - Deploy persistent volumes:
+ kubectl apply -f 10-pv-pvc-models.yaml
+ kubectl apply -f 11-pv-pvc-models.yaml
+
+ - Deploy vector DB Faiss wrapped
+  kubectl apply -f 20-deploy-faiss-wrap.yaml
+
+  - Déploy RAG chatbot interface
+  kubectl apply -f 21-deploy-chatbot-rag.yaml
+
+  Wait a little while for all pods to startup. Follow the startup with describe or logs command
+  - To access the chatbot RAG interface:
+  kubectl port-forward svc/chatbot-rag 8080:8080
+  Browse to http://localhost:8080/
+
+
 Example (local):
 ```bash
 # 1) Ingestion

@@ -19,7 +19,7 @@ spec:
         kubernetes.io/arch: amd64
       containers:
         - name: faiss-wrap
-          image: vmeoc/faiss-wrap:v2
+          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9000

@@ -8,6 +8,7 @@ Endpoints:
 - POST /search: query top-k results
   Payload: { query: str, top_k: int }
 - GET /metrics: Prometheus metrics
+- POST /reset: clear all data from FAISS index and metadata store
 
 Persistence:
 - FAISS index stored at /data/index.faiss
@@ -198,6 +199,26 @@ def search(req: SearchRequest):
                 "score": float(score),
             })
         return {"results": results}
+
+@app.post("/reset")
+def reset():
+    """Clear all data from FAISS index and metadata store."""
+    global _meta_df, _index
+    endpoint = "reset"
+    REQ_COUNTER.labels(endpoint).inc()
+    with REQ_LAT.labels(endpoint).time():
+        if _model is None or _index is None or _meta_df is None:
+            raise HTTPException(status_code=503, detail="Service not ready")
+        
+        with _lock:
+            # Create new empty index
+            _index = faiss.IndexFlatIP(EMBED_DIM)
+            # Create new empty metadata DataFrame
+            _meta_df = pd.DataFrame(columns=["id", "text", "metadata"])
+            # Persist empty state
+            _persist()
+        
+        return {"message": "All data cleared", "total_items": 0}
 
 # ---------------------
 # Internal helpers

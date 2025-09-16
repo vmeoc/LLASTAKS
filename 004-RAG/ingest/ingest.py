@@ -3,31 +3,86 @@ RAG Manager - Local ingestion script for LLASTA
 
 Purpose
 -------
-Read PDFs from S3, extract/clean/segment into chunks (V1: 1 page = 1 chunk),
+Read PDFs (from S3 or local files), extract/clean/segment into chunks, 
 then upsert to the `faiss-wrap` service (which embeds with bge-m3 and indexes in FAISS).
-Also writes a manifest.parquet back to S3 for traceability.
+Also writes a manifest.parquet back to S3 for traceability (S3 mode only).
 
-Run locally from your laptop. Keep it simple and reliable.
+How it works
+------------
+1. **Input**: PDFs from S3 bucket or local files
+2. **Extraction**: Uses pypdf to extract text from each page
+3. **Chunking**: 1 page = 1 chunk (simple segmentation strategy)
+4. **Cleaning**: Removes whitespace, normalizes text, filters short chunks
+5. **Deduplication**: Uses SHA256 hash to remove duplicate content
+6. **Output**: Sends chunks to FAISS vector database via faiss-wrap API
 
-Usage (example)
----------------
-# Ensure port-forward to faiss-wrap (in another terminal):
-#   kubectl -n llasta port-forward svc/faiss-wrap 18080:80
+Architecture explained for students
+-----------------------------------
+- **Parallel processing**: Uses ThreadPoolExecutor for concurrent PDF processing
+- **Batch upserts**: Groups chunks into batches to reduce HTTP overhead
+- **Error handling**: Continues processing even if individual PDFs fail
+- **Metadata tracking**: Each chunk includes source URI, page number, token count
+- **Dry-run mode**: Preview extracted data before sending to vector database
 
-python 004-RAG/ingest/ingest.py \
-  --s3-input s3://llasta-rag/PDF-Financial/ \
-  --s3-manifest s3://llasta-rag/manifests/ \
-  --faiss-wrap-url http://localhost:18080 \
-  --batch-size 64 \
-  --max-parallel 4
+Available Arguments
+-------------------
+Input Sources (choose one):
+  pdf_files                 Local PDF files to process (positional arguments)
+  --s3-input               S3 prefix with PDFs (default: s3://llasta-rag/PDF-Financial/)
 
-Notes for the student (what/why)
---------------------------------
-- We keep segmentation simple: 1 page -> 1 chunk. This matches Stage_Readme V1.
-- Cleaning removes boilerplate (whitespace-only, very short text) and normalizes spaces.
-- Dedupe: we hash the cleaned text; if two chunks have the same hash, we keep the first.
-- We send chunks in batches to reduce HTTP overhead (`/upsert`).
-- The manifest records the ingestion details for audits and rebuilds.
+Processing Options:
+  --dry-run                Show extracted data without sending to FAISS
+  --batch-size             Upsert batch size (default: 64)
+  --max-parallel           Parallel downloads/processing (default: 4)
+  --preview-chars          Characters to preview in logs (default: 80)
+
+FAISS Integration:
+  --faiss-wrap-url         faiss-wrap base URL (default: http://localhost:18080)
+  --http-timeout           Timeout for /upsert requests (default: 300.0s)
+
+S3 Configuration (S3 mode only):
+  --s3-manifest            S3 prefix to write manifests (default: s3://llasta-rag/manifests/)
+
+Usage Examples
+--------------
+# 1. Dry-run with local PDF (recommended for testing)
+python ingest.py --dry-run "path/to/bank_statement.pdf" --preview-chars 200
+
+# 2. Process multiple local PDFs
+python ingest.py --dry-run PDFs/*.pdf
+
+# 3. Send local PDF to FAISS (ensure faiss-wrap is running)
+#    kubectl -n llasta port-forward svc/faiss-wrap 18080:80
+python ingest.py "path/to/bank_statement.pdf" --faiss-wrap-url http://localhost:18080
+
+# 4. Process all PDFs from S3 (original mode)
+python ingest.py --s3-input s3://llasta-rag/PDF-Financial/ --batch-size 32
+
+# 5. Dry-run with S3 PDFs
+python ingest.py --dry-run --s3-input s3://llasta-rag/PDF-Financial/
+
+Prerequisites
+-------------
+- For local mode: PDF files accessible on filesystem
+- For S3 mode: AWS credentials configured, access to S3 bucket
+- For FAISS mode: faiss-wrap service running (port-forward or direct access)
+- Python dependencies: pypdf, pandas, requests, boto3
+
+Output Format
+-------------
+Each chunk contains:
+- id: unique identifier (filename#page-XXXX)
+- text: cleaned extracted text
+- metadata: {doc_id, source_uri, page, lang}
+- _row_hash: SHA256 for deduplication
+- _token_count: approximate token count
+
+Notes for RAG Implementation
+----------------------------
+- Simple chunking (1 page = 1 chunk) works well for structured documents like bank statements
+- For complex documents, consider semantic chunking or overlapping windows
+- Monitor chunk sizes - too small loses context, too large reduces retrieval precision
+- The cleaning process removes formatting but preserves numerical data
 """
 
 import argparse
@@ -259,49 +314,91 @@ def main():
     parser.add_argument("--max-parallel", type=int, default=4, help="Parallel downloads")
     parser.add_argument("--http-timeout", type=float, default=300.0, help="Timeout in seconds for each /upsert HTTP request")
     parser.add_argument("--preview-chars", type=int, default=80, help="Number of characters to preview from each text in logs")
+    parser.add_argument("--dry-run", action="store_true", help="Show extracted data without sending to FAISS")
+    parser.add_argument("pdf_files", nargs="*", help="Local PDF files to process (alternative to S3)")
     args = parser.parse_args()
 
-    print(f"Listing PDFs from: {args.s3_input}")
-    pdf_uris = list_s3_pdfs(args.s3_input)
-    if not pdf_uris:
+    # Determine input source: local files or S3
+    if args.pdf_files:
+        print(f"Processing {len(args.pdf_files)} local PDF files...")
+        pdf_sources = args.pdf_files
+        use_local = True
+    else:
+        print(f"Listing PDFs from: {args.s3_input}")
+        pdf_sources = list_s3_pdfs(args.s3_input)
+        use_local = False
+        
+    if not pdf_sources:
         print("No PDFs found. Exiting.")
         return
 
-    print(f"Found {len(pdf_uris)} PDFs. Starting ingestion…")
+    print(f"Found {len(pdf_sources)} PDFs. Starting {'dry-run analysis' if args.dry_run else 'ingestion'}…")
 
     all_chunks: List[Dict[str, Any]] = []
 
-    # Parallel download and process
-    # We define an inner function so it can capture `args` and helpers in scope.
-    # Each worker:
-    #   1) downloads one PDF from S3
-    #   2) extracts text per page
-    #   3) converts pages -> cleaned chunks
-    # If an error happens, we log and return an empty list so the pipeline continues.
-    def process_one(uri: str) -> List[Dict[str, Any]]:
+    # Process function for both local and S3 files
+    def process_one(source: str) -> List[Dict[str, Any]]:
         try:
-            pdf_bytes = download_s3_object_to_memory(uri)
+            if use_local:
+                # Local file processing
+                with open(source, 'rb') as f:
+                    pdf_bytes = f.read()
+                doc_id = os.path.splitext(os.path.basename(source))[0]
+                source_uri = f"file://{os.path.abspath(source)}"
+            else:
+                # S3 processing (original logic)
+                pdf_bytes = download_s3_object_to_memory(source)
+                doc_id = os.path.splitext(os.path.basename(source))[0]
+                source_uri = source
+                
             pages = extract_pages(pdf_bytes)
-            # doc_id from filename
-            doc_id = os.path.splitext(os.path.basename(uri))[0]
-            return make_chunks(doc_id=doc_id, source_uri=uri, pages=pages)
+            return make_chunks(doc_id=doc_id, source_uri=source_uri, pages=pages)
         except Exception as e:
-            print(f"Error processing {uri}: {e}")
+            print(f"Error processing {source}: {e}")
             return []
 
-    # Use a thread pool to parallelize I/O-bound steps (S3 download, PDF parsing).
-    # `max_workers` controls the parallelism level; keep small to avoid overloading S3.
+    # Use a thread pool to parallelize I/O-bound steps
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as ex:
-        futures = [ex.submit(process_one, uri) for uri in pdf_uris]
-        # as_completed yields futures as they finish, giving streaming progress.
+        futures = [ex.submit(process_one, source) for source in pdf_sources]
         for fut in concurrent.futures.as_completed(futures):
             chunks = fut.result()
             all_chunks.extend(chunks)
 
     print(f"Prepared {len(all_chunks)} chunks after cleaning/dedupe.")
 
-    # Upsert in batches
-    # We batch to keep requests smaller and more resilient.
+    # Dry-run mode: show extracted data without sending to FAISS
+    if args.dry_run:
+        print("\n" + "="*60)
+        print("DRY-RUN MODE: Showing extracted data (not sending to FAISS)")
+        print("="*60)
+        
+        for i, chunk in enumerate(all_chunks[:10]):  # Show first 10 chunks
+            print(f"\n--- Chunk {i+1} ---")
+            print(f"ID: {chunk['id']}")
+            print(f"Source: {chunk['metadata']['source_uri']}")
+            print(f"Page: {chunk['metadata']['page']}")
+            print(f"Token count: {chunk['_token_count']}")
+            
+            # Show text preview
+            text_preview = chunk['text'][:args.preview_chars]
+            print(f"Text preview: {text_preview}...")
+            
+            # Analyze numbers in the text
+            import re
+            numbers = re.findall(r'\d+[.,]\d+|\d+', chunk['text'])
+            if numbers:
+                print(f"Numbers found: {numbers[:10]}...")
+            else:
+                print("No numbers found in this chunk")
+        
+        if len(all_chunks) > 10:
+            print(f"\n... and {len(all_chunks) - 10} more chunks")
+            
+        print(f"\nTotal chunks ready for ingestion: {len(all_chunks)}")
+        print("Use without --dry-run to send to FAISS")
+        return
+
+    # Normal mode: upsert to FAISS
     total = 0
     ingest_t0 = time.time()
     for batch in batched(all_chunks, args.batch_size):
@@ -320,10 +417,12 @@ def main():
     per_item = (ingest_dt / total) if total else 0.0
     print(f"[Summary] Upsert phase took {ingest_dt:.1f}s for {total} items ({per_item:.2f}s/item avg)")
 
-    # Write manifest
-    # After successful upserts, we persist a manifest for traceability and rebuilds.
-    manifest_uri = write_manifest(args.s3_manifest, all_chunks)
-    print(f"Wrote manifest: {manifest_uri}")
+    # Write manifest (only for S3 mode)
+    if not use_local:
+        manifest_uri = write_manifest(args.s3_manifest, all_chunks)
+        print(f"Wrote manifest: {manifest_uri}")
+    else:
+        print("Skipping manifest write for local files")
 
 
 if __name__ == "__main__":
