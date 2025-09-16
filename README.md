@@ -4,6 +4,7 @@ LLASTA is an end-to-end project to deploy, operate, and use a modern LLM applica
 
 This README summarizes the project goals, the overall architecture, and explains how to use it quickly both locally and in the cluster.
 
+![Project schema](Doc/schema.png)
 
 ## Objectives
 - Validate understanding of a complete LLM deployment on the cloud.
