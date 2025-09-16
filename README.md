@@ -1,4 +1,4 @@
-# LLASTA – LLM App Stack on AWS/EKS
+# LLASTA – LLM App Stack on Kubernetes
 
 LLASTA is an end-to-end project to deploy, operate, and use a modern LLM application on AWS, leveraging Kubernetes (EKS), vLLM for inference, and application components (chatbot, RAG, fine-tuning, monitoring).
 
