@@ -44,6 +44,14 @@
         .reset-button { background:#ff6b6b; color:white; }
         .reset-button:hover { background:#ff5252; transform:translateY(-2px); }
         .error-message { background:#ffebee; color:#c62828; padding:12px 16px; border-radius:8px; margin:10px 0; border-left:4px solid #c62828; }
+        .controls-wrapper { display: flex; align-items: center; gap: 10px; }
+        .think-toggle { display: flex; align-items: center; }
+        .toggle-label { display: flex; align-items: center; cursor: pointer; font-size: 14px; color: #666; }
+        .toggle-label input[type="checkbox"] { display: none; }
+        .toggle-slider { position: relative; display: inline-block; width: 40px; height: 20px; background-color: #ccc; border-radius: 20px; transition: background-color 0.2s ease; margin-right: 8px; }
+        .toggle-slider::before { position: absolute; content: ""; width: 16px; height: 16px; background-color: white; border-radius: 50%; top: 2px; left: 2px; transition: transform 0.2s ease; }
+        .toggle-label input[type="checkbox"]:checked + .toggle-slider { background-color: #4CAF50; }
+        .toggle-label input[type="checkbox"]:checked + .toggle-slider::before { transform: translateX(20px); }
         @media (max-width:768px){ .chat-container{ width:95%; height:95vh; border-radius:10px;} .message-content{ max-width:85%; } .chat-input-wrapper{ flex-direction:column; gap:10px;} .chat-button{ width:100%; } }
     </style>
 </head>
@@ -67,8 +75,17 @@
         <div class="chat-input-container">
             <div class="chat-input-wrapper">
                 <textarea id="chatInput" class="chat-input" placeholder="Tapez votre message ici..." rows="1"></textarea>
-                <button id="sendButton" class="chat-button send-button">Envoyer 📤</button>
-                <button id="resetButton" class="chat-button reset-button">Reset 🔄</button>
+                <div class="controls-wrapper">
+                    <div class="think-toggle">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="thinkToggle" checked>
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text">Think Mode</span>
+                        </label>
+                    </div>
+                    <button id="sendButton" class="chat-button send-button">Envoyer 📤</button>
+                    <button id="resetButton" class="chat-button reset-button">Reset 🔄</button>
+                </div>
             </div>
         </div>
     </div>
@@ -83,6 +100,9 @@
                 this.statusIndicator = document.getElementById('statusIndicator');
                 this.conversation = [];
                 this.isTyping = false;
+                this.thinkMode = true;
+                this.thinkToggle = document.getElementById('thinkToggle');
+                this.thinkToggle.addEventListener('change', () => this.setThinkMode(this.thinkToggle.checked));
                 this.initializeEventListeners();
                 this.checkBackendHealth();
             }
@@ -124,7 +144,7 @@
                     const response = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ messages: this.conversation, stream: false, max_tokens: 1000, temperature: 0.7 })
+                        body: JSON.stringify({ messages: this.conversation, stream: false, max_tokens: 1000, temperature: 0.7, think_mode: this.thinkMode })
                     });
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const result = await response.json();
@@ -178,6 +198,9 @@
                 this.chatMessages.appendChild(errorDiv);
                 this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
                 setTimeout(() => errorDiv.remove(), 5000);
+            }
+            setThinkMode(thinkMode) {
+                this.thinkMode = thinkMode;
             }
         }
         document.addEventListener('DOMContentLoaded', () => { window.llastaChatbotRAG = new LLASTAChatbotRAG(); });

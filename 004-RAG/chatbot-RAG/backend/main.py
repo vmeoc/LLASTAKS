@@ -48,12 +48,14 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
-    stream: bool = False  # keep defaults simple
+    stream: bool = False
     max_tokens: Optional[int] = 1000
     temperature: Optional[float] = 0.7
+    think_mode: bool = True
 
 class ChatResponse(BaseModel):
     message: ChatMessage
+    thinking_content: Optional[str]
     usage: Dict[str, Any]
 
 # ---------------------------
@@ -150,6 +152,34 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
         return [messages[0], system_msg] + messages[1:]
     return [system_msg] + messages
 
+def parse_thinking_content(response_text: str) -> tuple[str, str]:
+    """
+    Parse LLM response to separate thinking content from final answer.
+    Returns (thinking_content, final_content)
+    """
+    # Look for </think> tag to separate thinking from final content
+    think_end_tag = "</think>"
+    
+    if think_end_tag in response_text:
+        # Find the last occurrence of </think>
+        think_end_index = response_text.rfind(think_end_tag)
+        if think_end_index != -1:
+            # Extract thinking content (everything before and including </think>)
+            thinking_content = response_text[:think_end_index + len(think_end_tag)].strip()
+            # Extract final content (everything after </think>)
+            final_content = response_text[think_end_index + len(think_end_tag):].strip()
+            
+            # Remove <think> opening tag from thinking content for cleaner display
+            if thinking_content.startswith("<think>"):
+                thinking_content = thinking_content[7:]  # Remove "<think>"
+            if thinking_content.endswith("</think>"):
+                thinking_content = thinking_content[:-8]  # Remove "</think>"
+            
+            return thinking_content.strip(), final_content.strip()
+    
+    # If no </think> tag found, return empty thinking and full content
+    return "", response_text.strip()
+
 # ---------------------------
 # Routes
 # ---------------------------
@@ -194,7 +224,7 @@ async def chat_endpoint(request: ChatRequest):
         context_block = build_context_block(retrieved)
         messages_for_vllm = inject_context_into_messages(base_messages, context_block)
 
-        # Apply no_think to the last user message (align with 003-chatbot behavior)
+        # Apply think/no_think to the last user message (align with 003-chatbot behavior)
         # We do this AFTER injecting the optional context system message so the index is correct.
         last_user_idx = None
         for i in range(len(messages_for_vllm) - 1, -1, -1):
@@ -204,7 +234,10 @@ async def chat_endpoint(request: ChatRequest):
         if last_user_idx is not None:
             content = messages_for_vllm[last_user_idx].get("content", "")
             if isinstance(content, str) and "/no_think" not in content:
-                messages_for_vllm[last_user_idx]["content"] = content.rstrip() + " /no_think"
+                if request.think_mode:
+                    messages_for_vllm[last_user_idx]["content"] = content.rstrip()
+                else:
+                    messages_for_vllm[last_user_idx]["content"] = content.rstrip() + " /no_think"
 
         vllm_request = {
             "model": VLLM_MODEL_NAME,
@@ -236,11 +269,18 @@ async def chat_endpoint(request: ChatRequest):
             )
             response.raise_for_status()
             result = response.json()
+            raw_content = result["choices"][0]["message"]["content"]
+            
+            # Log first 200 characters for debugging
+            print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
+            
+            thinking_content, final_content = parse_thinking_content(raw_content)
             return ChatResponse(
                 message=ChatMessage(
                     role="assistant",
-                    content=result["choices"][0]["message"]["content"],
+                    content=final_content,
                 ),
+                thinking_content=thinking_content if thinking_content else None,
                 usage=result.get("usage", {}),
             )
 
