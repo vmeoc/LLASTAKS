@@ -86,17 +86,23 @@ To connect your local machine to the vLLM service, use `kubectl port-forward` on
 - Backend: `003-chatbot/backend/main.py` (FastAPI). Dependencies in `requirements.txt`.
 - Frontend: `003-chatbot/frontend/index.html`.
 
-Start the chatbot in K8:
+# Start the chatbot in K8:
  - kubectl apply -f chatbot.yaml
  - kubectl port-forward svc/chatbot 8080:8080
 
-Start the backend locally (example):
+# Start the backend locally (example):
 ```bash
 python -m venv .venv && source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r 003-chatbot/backend/requirements.txt
 python main.py
 ```
 
+# start the chatbot locally and connect to locally run ollama
+Commands to adapt:
+export VLLM_MODEL_NAME="qwen3:8B"
+export VLLM_BASE_URL="http://172.22.224.1:8000"
+ollama serve
+uv run main.py
 
 ## RAG (ingestion, FAISS wrapper, chatbot-RAG)
 - Sample data: `004-RAG/Financial files/` (PDFs).
