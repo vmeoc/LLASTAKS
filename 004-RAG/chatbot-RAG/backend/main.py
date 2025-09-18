@@ -21,11 +21,17 @@ from typing import List, Dict, Any, Optional
 import httpx
 import json
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 # ---------------------------
 # Configuration (env vars)
 # ---------------------------
+
+# Determine paths relative to this script's location
+SCRIPT_DIR = Path(__file__).parent.absolute()
+PROJECT_ROOT = SCRIPT_DIR.parent  # chatbot-RAG/
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8080"))
 
@@ -68,6 +74,10 @@ async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=60.0)
     print(f"🚀 Backend-RAG started - vLLM URL: {VLLM_BASE_URL} | faiss-wrap: {FAISS_WRAP_URL}")
+    print(f"📁 Script directory: {SCRIPT_DIR}")
+    print(f"📁 Project root: {PROJECT_ROOT}")
+    print(f"📁 Frontend directory: {FRONTEND_DIR}")
+    print(f"📄 Frontend file exists: {(FRONTEND_DIR / 'index.html').exists()}")
     yield
     await http_client.aclose()
     print("🛑 Backend-RAG stopped")
@@ -80,7 +90,7 @@ app = FastAPI(
 )
 
 # Serve static frontend from sibling folder `frontend/`
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 # ---------------------------
 # Helpers: RAG retrieval and message prep
@@ -186,11 +196,12 @@ def parse_thinking_content(response_text: str) -> tuple[str, str]:
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
     try:
-        with open("frontend/index.html", "r", encoding="utf-8") as f:
+        frontend_file = FRONTEND_DIR / "index.html"
+        with open(frontend_file, "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(
-            content="<h1>Frontend not found</h1><p>Create frontend/index.html</p>",
+            content=f"<h1>Frontend not found</h1><p>Expected: {FRONTEND_DIR / 'index.html'}</p>",
             status_code=404,
         )
 
