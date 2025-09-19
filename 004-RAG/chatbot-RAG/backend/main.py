@@ -101,18 +101,43 @@ async def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> List[Dict[str,
     Returns a list of {text, metadata, score} dicts. On failure, returns [].
     """
     global http_client
+    print(f"🔍 RAG SEARCH: query='{query}', top_k={top_k}")
+    
     try:
         url = f"{FAISS_WRAP_URL}/search"
         payload = {"query": query, "top_k": top_k}
+        print(f"🔍 Sending request to: {url}")
+        print(f"🔍 Payload: {payload}")
+        
         resp = await http_client.post(url, json=payload)
+        print(f"🔍 Response status: {resp.status_code}")
+        
         if resp.status_code != 200:
-            print(f"⚠️ faiss-wrap search non-200: {resp.status_code} - {await _safe_text(resp)}")
+            error_text = await _safe_text(resp)
+            print(f"⚠️ faiss-wrap search non-200: {resp.status_code} - {error_text}")
             return []
+            
         data = resp.json()
-        # Expecting {results: [{text, metadata, score}, ...]}
-        return data.get("results", []) if isinstance(data, dict) else []
+        print(f"🔍 Raw response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+        
+        results = data.get("results", []) if isinstance(data, dict) else []
+        print(f"🔍 Retrieved {len(results)} results from FAISS")
+        
+        # Log each result in detail
+        for i, result in enumerate(results):
+            print(f"   Result {i+1}:")
+            print(f"     Score: {result.get('score', 'N/A')}")
+            print(f"     Text length: {len(result.get('text', ''))}")
+            print(f"     Metadata: {result.get('metadata', {})}")
+            text_preview = (result.get('text', '') or '')[:150]
+            print(f"     Text preview: {text_preview}...")
+        
+        return results
+        
     except Exception as e:
         print(f"⚠️ faiss-wrap search error: {e}")
+        import traceback
+        print(f"⚠️ Full traceback: {traceback.format_exc()}")
         return []
 
 async def _safe_text(response: httpx.Response) -> str:
@@ -127,21 +152,47 @@ def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CO
     We include simple source hints for transparency.
     """
     if not results:
+        print("📝 No RAG results - empty context block")
         return ""
+    
+    print(f"📝 Building context block from {len(results)} RAG results (limit: {limit_chars} chars)")
+    
     lines: List[str] = ["You have access to the following context passages. Cite them when relevant.\n"]
     running = 0
+    included_chunks = 0
+    
     for i, r in enumerate(results, start=1):
         text = (r.get("text") or "").strip()
         meta = r.get("metadata") or {}
         src = meta.get("source") or meta.get("file") or meta.get("s3_key") or "unknown"
         page = meta.get("page")
+        score = r.get("score", "N/A")
+        
         header = f"[{i}] Source: {src}{' p.' + str(page) if page is not None else ''}"
         snippet = f"{header}\n{text}\n"
+        
+        # Log each chunk being considered
+        print(f"   Chunk {i}: score={score}, text_len={len(text)}, source={src}, page={page}")
+        print(f"   Text preview: {text[:100]}...")
+        
         if running + len(snippet) > limit_chars:
+            print(f"   ⚠️ Chunk {i} would exceed limit ({running + len(snippet)} > {limit_chars}) - stopping")
             break
+            
         lines.append(snippet)
         running += len(snippet)
-    return "\n".join(lines).strip()
+        included_chunks += 1
+        print(f"   ✅ Chunk {i} included (running total: {running} chars)")
+    
+    context_block = "\n".join(lines).strip()
+    
+    print(f"📝 Context block built: {included_chunks}/{len(results)} chunks, {len(context_block)} chars total")
+    print(f"📄 COMPLETE CONTEXT BLOCK:")
+    print("=" * 60)
+    print(context_block)
+    print("=" * 60)
+    
+    return context_block
 
 def inject_context_into_messages(messages: List[Dict[str, str]], context_block: str) -> List[Dict[str, str]]:
     """
@@ -149,7 +200,11 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
     We avoid modifying user content to preserve intent. If context is empty, return as-is.
     """
     if not context_block:
+        print("💬 No context to inject - returning original messages")
         return messages
+    
+    print(f"💬 Injecting context into messages (context length: {len(context_block)} chars)")
+    
     system_msg = {
         "role": "system",
         "content": (
@@ -157,10 +212,19 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
             "If the context is not sufficient, say so and proceed cautiously.\n\n" + context_block
         ),
     }
+    
     # Prepend or insert after an existing system message
     if messages and messages[0].get("role") == "system":
-        return [messages[0], system_msg] + messages[1:]
-    return [system_msg] + messages
+        print("💬 Found existing system message - inserting RAG context after it")
+        final_messages = [messages[0], system_msg] + messages[1:]
+    else:
+        print("💬 No existing system message - prepending RAG context")
+        final_messages = [system_msg] + messages
+    
+    print(f"💬 Final message structure: {[msg['role'] for msg in final_messages]}")
+    print(f"💬 System message with RAG context length: {len(system_msg['content'])} chars")
+    
+    return final_messages
 
 
 def parse_thinking_content(response_text: str) -> tuple[str, str]:
@@ -237,11 +301,23 @@ async def chat_endpoint(request: ChatRequest):
 
         # Retrieve optional context using the latest user message
         last_user_msg = next((m["content"] for m in reversed(base_messages) if m["role"] == "user"), None)
+        print(f"🎯 RAG FLOW START: User query = '{last_user_msg}'")
+        
         retrieved = []
         if last_user_msg:
             retrieved = await retrieve_context(last_user_msg, top_k=RAG_TOP_K)
+        else:
+            print("⚠️ No user message found for RAG retrieval")
+            
         context_block = build_context_block(retrieved)
         messages_for_vllm = inject_context_into_messages(base_messages, context_block)
+        
+        print(f"🎯 RAG FLOW SUMMARY:")
+        print(f"   Query: '{last_user_msg}'")
+        print(f"   Retrieved chunks: {len(retrieved)}")
+        print(f"   Context block length: {len(context_block)} chars")
+        print(f"   Final messages count: {len(messages_for_vllm)}")
+        print(f"   RAG enabled: {'YES' if context_block else 'NO'}")
 
         # Apply think/no_think to the last user message (align with 003-chatbot behavior)
         # We do this AFTER injecting the optional context system message so the index is correct.
