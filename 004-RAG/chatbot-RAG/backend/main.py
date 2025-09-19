@@ -55,7 +55,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     stream: bool = False
-    max_tokens: Optional[int] = 1000
+    max_tokens: Optional[int] = None  # Pas de limite pour les tests
     temperature: Optional[float] = 0.7
     think_mode: bool = True
 
@@ -72,7 +72,7 @@ http_client: Optional[httpx.AsyncClient] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    http_client = httpx.AsyncClient(timeout=60.0)
+    http_client = httpx.AsyncClient(timeout=120.0)
     print(f"🚀 Backend-RAG started - vLLM URL: {VLLM_BASE_URL} | faiss-wrap: {FAISS_WRAP_URL}")
     print(f"📁 Script directory: {SCRIPT_DIR}")
     print(f"📁 Project root: {PROJECT_ROOT}")
@@ -162,11 +162,15 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
         return [messages[0], system_msg] + messages[1:]
     return [system_msg] + messages
 
+
 def parse_thinking_content(response_text: str) -> tuple[str, str]:
     """
     Parse LLM response to separate thinking content from final answer.
     Returns (thinking_content, final_content)
     """
+    # Log the parsing process for debugging
+    print(f"🧠 Parsing response of {len(response_text)} chars")
+    
     # Look for </think> tag to separate thinking from final content
     think_end_tag = "</think>"
     
@@ -185,9 +189,13 @@ def parse_thinking_content(response_text: str) -> tuple[str, str]:
             if thinking_content.endswith("</think>"):
                 thinking_content = thinking_content[:-8]  # Remove "</think>"
             
+            print(f"🧠 Found thinking content: {len(thinking_content)} chars")
+            print(f"🧠 Final content: {len(final_content)} chars")
+            
             return thinking_content.strip(), final_content.strip()
     
     # If no </think> tag found, return empty thinking and full content
+    print("🧠 No </think> tag found, returning full content")
     return "", response_text.strip()
 
 # ---------------------------
@@ -250,11 +258,15 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     messages_for_vllm[last_user_idx]["content"] = content.rstrip() + " /no_think"
 
+        # Pas de limite de tokens pour les tests
+        effective_max_tokens = request.max_tokens  # None = pas de limite
+        print(f"🎯 Max tokens: {effective_max_tokens or 'unlimited'} (think_mode={request.think_mode})")
+
         vllm_request = {
             "model": VLLM_MODEL_NAME,
             "messages": messages_for_vllm,
             "stream": request.stream,
-            "max_tokens": request.max_tokens,
+            "max_tokens": effective_max_tokens,  # None = pas de limite
             "temperature": request.temperature,
             # Qwen-friendly defaults
             "top_p": 0.8,
@@ -282,8 +294,10 @@ async def chat_endpoint(request: ChatRequest):
             result = response.json()
             raw_content = result["choices"][0]["message"]["content"]
             
-            # Log first 200 characters for debugging
+            # Log response length and first 200 characters for debugging
+            print(f"🔍 LLM Response length: {len(raw_content)} chars")
             print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
+            print(f"🔍 LLM Response (last 100 chars): {raw_content[-100:] if len(raw_content) > 100 else 'N/A'}")
             
             thinking_content, final_content = parse_thinking_content(raw_content)
             return ChatResponse(
