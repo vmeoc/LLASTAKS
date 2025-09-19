@@ -368,34 +368,104 @@ def main():
 
     # Dry-run mode: show extracted data without sending to FAISS
     if args.dry_run:
-        print("\n" + "="*60)
-        print("DRY-RUN MODE: Showing extracted data (not sending to FAISS)")
-        print("="*60)
+        print("\n" + "="*80)
+        print("DRY-RUN MODE: Showing ALL extracted data (not sending to FAISS)")
+        print("="*80)
         
-        for i, chunk in enumerate(all_chunks[:10]):  # Show first 10 chunks
-            print(f"\n--- Chunk {i+1} ---")
-            print(f"ID: {chunk['id']}")
-            print(f"Source: {chunk['metadata']['source_uri']}")
-            print(f"Page: {chunk['metadata']['page']}")
-            print(f"Token count: {chunk['_token_count']}")
+        # Statistics summary first
+        total_tokens = sum(chunk['_token_count'] for chunk in all_chunks)
+        avg_tokens = total_tokens / len(all_chunks) if all_chunks else 0
+        print(f"\n📊 STATISTICS:")
+        print(f"   Total chunks: {len(all_chunks)}")
+        print(f"   Total tokens: {total_tokens}")
+        print(f"   Average tokens per chunk: {avg_tokens:.1f}")
+        print(f"   Min tokens: {min(chunk['_token_count'] for chunk in all_chunks) if all_chunks else 0}")
+        print(f"   Max tokens: {max(chunk['_token_count'] for chunk in all_chunks) if all_chunks else 0}")
+        
+        # Show ALL chunks with complete data
+        for i, chunk in enumerate(all_chunks):
+            print(f"\n{'='*50} CHUNK {i+1}/{len(all_chunks)} {'='*50}")
             
-            # Show text preview
-            text_preview = chunk['text'][:args.preview_chars]
-            print(f"Text preview: {text_preview}...")
+            # Core identifiers
+            print(f"🆔 ID: {chunk['id']}")
+            print(f"📄 Source: {chunk['metadata']['source_uri']}")
+            print(f"📖 Page: {chunk['metadata']['page']}")
+            print(f"🏷️  Language: {chunk['metadata'].get('lang', 'N/A')}")
+            print(f"🔢 Token count: {chunk['_token_count']}")
+            print(f"🔐 Hash: {chunk['_row_hash'][:16]}...")
             
-            # Analyze numbers in the text
+            # Complete metadata
+            print(f"\n📋 COMPLETE METADATA:")
+            for key, value in chunk['metadata'].items():
+                print(f"   {key}: {value}")
+            
+            # Text analysis
+            text = chunk['text']
+            print(f"\n📝 TEXT ANALYSIS:")
+            print(f"   Length: {len(text)} characters")
+            print(f"   Lines: {text.count(chr(10)) + 1}")
+            print(f"   Words: {len(text.split())}")
+            
+            # Find all numbers (financial data detection)
             import re
-            numbers = re.findall(r'\d+[.,]\d+|\d+', chunk['text'])
-            if numbers:
-                print(f"Numbers found: {numbers[:10]}...")
-            else:
-                print("No numbers found in this chunk")
-        
-        if len(all_chunks) > 10:
-            print(f"\n... and {len(all_chunks) - 10} more chunks")
+            # Enhanced number patterns for financial data
+            currency_pattern = r'[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\s*(?:EUR|€|USD|\$)?'
+            number_pattern = r'[-+]?\d+[.,]\d+|\d+'
+            dates_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}'
             
-        print(f"\nTotal chunks ready for ingestion: {len(all_chunks)}")
-        print("Use without --dry-run to send to FAISS")
+            currencies = re.findall(currency_pattern, text)
+            numbers = re.findall(number_pattern, text)
+            dates = re.findall(dates_pattern, text)
+            
+            print(f"\n💰 FINANCIAL DATA DETECTED:")
+            if currencies:
+                print(f"   Currency amounts: {currencies[:5]}{'...' if len(currencies) > 5 else ''}")
+                print(f"   Total currency amounts found: {len(currencies)}")
+            else:
+                print("   No currency amounts found")
+                
+            if numbers:
+                print(f"   All numbers: {numbers[:10]}{'...' if len(numbers) > 10 else ''}")
+                print(f"   Total numbers found: {len(numbers)}")
+            else:
+                print("   No numbers found")
+                
+            if dates:
+                print(f"   Dates: {dates[:5]}{'...' if len(dates) > 5 else ''}")
+                print(f"   Total dates found: {len(dates)}")
+            else:
+                print("   No dates found")
+            
+            # Full text content (with line numbers for debugging)
+            print(f"\n📄 COMPLETE TEXT CONTENT:")
+            print("-" * 60)
+            lines = text.split('\n')
+            for line_num, line in enumerate(lines, 1):
+                if line.strip():  # Only show non-empty lines
+                    print(f"{line_num:3d}: {line}")
+            print("-" * 60)
+            
+            # What would be sent to FAISS (exact payload)
+            faiss_payload = {
+                "id": chunk["id"], 
+                "text": chunk["text"], 
+                "metadata": chunk["metadata"]
+            }
+            print(f"\n🔄 FAISS PAYLOAD (what would be sent):")
+            print(f"   Payload size: {len(str(faiss_payload))} characters")
+            print(f"   Keys: {list(faiss_payload.keys())}")
+            print(f"   Text length in payload: {len(faiss_payload['text'])}")
+            
+            # Separator between chunks
+            if i < len(all_chunks) - 1:
+                print(f"\n{'⬇️ ' * 20}")
+        
+        print(f"\n{'='*80}")
+        print(f"✅ DRY-RUN COMPLETE")
+        print(f"📊 Analyzed {len(all_chunks)} chunks from {len(set(chunk['metadata']['doc_id'] for chunk in all_chunks))} documents")
+        print(f"💾 Total data ready for FAISS: ~{sum(len(str(chunk)) for chunk in all_chunks)} characters")
+        print(f"🚀 Use without --dry-run to send to FAISS at: {args.faiss_wrap_url}")
+        print("="*80)
         return
 
     # Normal mode: upsert to FAISS
