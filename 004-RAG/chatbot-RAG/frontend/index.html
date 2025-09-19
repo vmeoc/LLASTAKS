@@ -22,7 +22,7 @@
         .chat-messages { flex:1; padding:20px; overflow-y:auto; background:#f8f9fa; }
         .message { margin-bottom:15px; display:flex; align-items:flex-start; }
         .message.user { justify-content:flex-end; }
-        .message-content { max-width:70%; padding:12px 16px; border-radius:18px; word-wrap:break-word; line-height:1.4; }
+        .message-content { max-width:70%; padding:12px 16px; border-radius:18px; word-wrap:break-word; line-height:1.4; white-space: pre-wrap; }
         .message.user .message-content { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; border-bottom-right-radius:4px; }
         .message.assistant .message-content { background:white; color:#333; border:1px solid #e1e5e9; border-bottom-left-radius:4px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
         .message-avatar { width:32px; height:32px; border-radius:50%; margin:0 10px; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:14px; }
@@ -52,6 +52,18 @@
         .toggle-slider::before { position: absolute; content: ""; width: 16px; height: 16px; background-color: white; border-radius: 50%; top: 2px; left: 2px; transition: transform 0.2s ease; }
         .toggle-label input[type="checkbox"]:checked + .toggle-slider { background-color: #4CAF50; }
         .toggle-label input[type="checkbox"]:checked + .toggle-slider::before { transform: translateX(20px); }
+        
+        /* Markdown styling */
+        .message-content h1, .message-content h2, .message-content h3 { margin: 10px 0 5px 0; color: #333; }
+        .message-content h1 { font-size: 1.2em; }
+        .message-content h2 { font-size: 1.1em; }
+        .message-content h3 { font-size: 1.05em; }
+        .message-content strong { font-weight: bold; color: #2c3e50; }
+        .message-content em { font-style: italic; }
+        .message-content code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 0.9em; }
+        .message-content hr { border: none; border-top: 1px solid #ddd; margin: 10px 0; }
+        .message-content p { margin: 5px 0; }
+        
         @media (max-width:768px){ .chat-container{ width:95%; height:95vh; border-radius:10px;} .message-content{ max-width:85%; } .chat-input-wrapper{ flex-direction:column; gap:10px;} .chat-button{ width:100%; } }
     </style>
 </head>
@@ -91,6 +103,34 @@
     </div>
 
     <script>
+        // Simple markdown to HTML converter
+        function markdownToHtml(text) {
+            return text
+                // Headers
+                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+                // Bold
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                // Italic
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                // Code inline
+                .replace(/`(.*?)`/g, '<code>$1</code>')
+                // Horizontal rule
+                .replace(/^---$/gm, '<hr>')
+                // Line breaks (double newline = paragraph)
+                .replace(/\n\n/g, '</p><p>')
+                // Single line breaks
+                .replace(/\n/g, '<br>')
+                // Wrap in paragraph if not already wrapped
+                .replace(/^(?!<[h|p|u|o|h])/gm, '<p>')
+                .replace(/(?<!>)$/gm, '</p>')
+                // Clean up empty paragraphs
+                .replace(/<p><\/p>/g, '')
+                .replace(/<p>(<h[1-6]>)/g, '$1')
+                .replace(/(<\/h[1-6]>)<\/p>/g, '$1');
+        }
+
         class LLASTAChatbotRAG {
             constructor() {
                 this.chatMessages = document.getElementById('chatMessages');
@@ -144,7 +184,7 @@
                     const response = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ messages: this.conversation, stream: false, max_tokens: 1000, temperature: 0.7, think_mode: this.thinkMode })
+                        body: JSON.stringify({ messages: this.conversation, stream: false, max_tokens: null, temperature: 0.7, think_mode: this.thinkMode })
                     });
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const result = await response.json();
@@ -160,9 +200,13 @@
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${role}`;
                 const avatar = role === 'user' ? '👤' : '🤖';
+                
+                // Convert markdown to HTML for assistant messages
+                const processedContent = role === 'assistant' ? markdownToHtml(content) : content;
+                
                 messageDiv.innerHTML = `
                     <div class="message-avatar">${avatar}</div>
-                    <div class="message-content">${content}</div>
+                    <div class="message-content">${processedContent}</div>
                 `;
                 this.chatMessages.appendChild(messageDiv);
                 this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
