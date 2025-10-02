@@ -15,8 +15,7 @@ spec:
       labels:
         app: faiss-wrap
     spec:
-      nodeSelector:
-        kubernetes.io/arch: amd64
+      # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: faiss-wrap
           image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3

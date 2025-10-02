@@ -15,8 +15,7 @@ spec:
       labels:
         app: chatbot-rag
     spec:
-      nodeSelector:
-        kubernetes.io/arch: amd64
+      # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: chatbot-rag
           image: vmeoc/chatbot-rag:v3.3

@@ -172,8 +172,21 @@ print_status "Waiting for vLLM pod to be ready (this may take 5-10 minutes)..."
 kubectl wait --for=condition=ready pod -l app=vllm-qwen3 -n llasta --timeout=600s
 check_success "vLLM pod readiness"
 
+# Deploy Rag chatbot (optional)
+print_status "Deploying Rag chatbot stack..."
+kubectl apply -f 10-pv-pvc-models.yaml
+check_success "PersistentVolumeClaim for models cache"
+kubectl apply -f 11-pv-pvc-faiss.yaml
+check_success "PersistentVolumeClaim for faiss"
+kubectl apply -f 20-deploy-faiss-wrap.yaml
+check_success "Faiss Wrap deployment"
+kubectl apply -f 21-deploy-chatbot-rag.yaml
+check_success "Chatbot Rag deployment"
+
 print_success "🎉 LLASTA deployment completed successfully!"
 print_status "Next steps:"
-echo -e "  1. Start port-forward: ${GREEN}kubectl -n llasta port-forward svc/vllm 8000:8000${NC}"
+echo -e "  1. Start port-forward to the vLLM service: ${GREEN}kubectl -n llasta port-forward svc/vllm 8000:8000${NC}"
 echo -e "  2. Test API: ${GREEN}curl http://127.0.0.1:8000/v1/models${NC}"
 echo -e "  3. Chat with Qwen3: ${GREEN}curl -s 'http://127.0.0.1:8000/v1/chat/completions' -H 'Content-Type: application/json' -d '{\"model\": \"Qwen3-8B\", \"messages\": [{\"role\":\"user\",\"content\":\"Hello!\"}]}'${NC}"
+echo -e "  4. Start port-forward to the chatbot-rag service: ${GREEN}kubectl -n llasta port-forward svc/chatbot-rag 8080:8080${NC}"
+echo -e "  5. Access the chatbot-rag interface: ${GREEN}http://127.0.0.1:8080${NC}"

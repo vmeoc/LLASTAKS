@@ -154,7 +154,8 @@ resource "aws_eks_addon" "ebs_csi" {
     aws_iam_role.ebs_csi_driver_role,
     aws_iam_role_policy_attachment.ebs_csi_driver_policy,
     # Ensure nodes exist before installing addon to avoid long creation waits
-    aws_eks_node_group.default,
+    aws_eks_node_group.gpu,
+    aws_eks_node_group.cpu,
   ]
 }
 
@@ -192,10 +193,10 @@ resource "aws_iam_role_policy_attachment" "eks_node_AmazonEKS_CNI_Policy" {
 #   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 # }
 
-# === EKS Node Group ===
-resource "aws_eks_node_group" "default" {
+# === EKS Node Group - GPU (pour vLLM uniquement) ===
+resource "aws_eks_node_group" "gpu" {
   cluster_name    = aws_eks_cluster.this.name
-  node_group_name = "default"
+  node_group_name = "gpu-nodes"
   node_role_arn   = aws_iam_role.eks_node_role.arn
   subnet_ids      = local.nodegroup_subnet_ids
 
@@ -205,17 +206,71 @@ resource "aws_eks_node_group" "default" {
     min_size     = 1
   }
 
-  # GPU Spot (4 vCPU / 1 GPU)
+  # GPU ON_DEMAND (4 vCPU / 1 GPU)
   capacity_type  = "ON_DEMAND"
   ami_type       = "AL2023_x86_64_NVIDIA"
 
-  # Ajout de g6.xlarge et g6e.xlarge
   instance_types = [
     "g5.xlarge",
   ]
 
   # Configuration du volume EBS racine
   disk_size = 100
+
+  # Labels pour identifier les nœuds GPU
+  labels = {
+    "workload-type" = "gpu"
+    "nvidia.com/gpu" = "true"
+  }
+
+  # Taints pour empêcher les pods non-GPU de s'y déployer
+  taint {
+    key    = "nvidia.com/gpu"
+    value  = "true"
+    effect = "NO_SCHEDULE"
+  }
+
+  # Pour forcer le refresh du nodegroup si nécessaire
+  force_update_version = true
+
+  # Ensure subnets are tagged before creating the node group
+  depends_on = [
+    aws_ec2_tag.subnet_cluster_shared,
+    aws_ec2_tag.subnet_elb,
+    aws_iam_role_policy_attachment.eks_node_AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.eks_node_AmazonEC2ContainerRegistryReadOnly,
+    aws_iam_role_policy_attachment.eks_node_AmazonEKS_CNI_Policy
+  ]
+}
+
+# === EKS Node Group - CPU (pour tous les autres workloads) ===
+resource "aws_eks_node_group" "cpu" {
+  cluster_name    = aws_eks_cluster.this.name
+  node_group_name = "cpu-nodes"
+  node_role_arn   = aws_iam_role.eks_node_role.arn
+  subnet_ids      = local.nodegroup_subnet_ids
+
+  scaling_config {
+    desired_size = 1
+    max_size     = 2
+    min_size     = 1
+  }
+
+  # CPU ON_DEMAND (8 vCPU / 32GB RAM)
+  capacity_type  = "ON_DEMAND"
+  ami_type       = "AL2023_x86_64_STANDARD"
+
+  instance_types = [
+    "t3.2xlarge",  # 8 vCPU, 32GB RAM - optimal pour vos workloads CPU
+  ]
+
+  # Configuration du volume EBS racine
+  disk_size = 50
+
+  # Labels pour identifier les nœuds CPU
+  labels = {
+    "workload-type" = "cpu"
+  }
 
   # Pour forcer le refresh du nodegroup si nécessaire
   force_update_version = true

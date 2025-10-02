@@ -67,6 +67,7 @@ spec:
         app: chatbot
         component: backend
     spec:
+      # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
       - name: chatbot-backend
         # Image à construire et pousser vers ECR ou Docker Hub

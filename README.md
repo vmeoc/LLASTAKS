@@ -15,10 +15,13 @@ Detailed reference: `Project.md`.
 
 
 ## Architecture (overview)
-- Kubernetes EKS on AWS, with a GPU node (g5.xlarge) and EBS storage for model weights.
-- vLLM deployed in the cluster, exposing an OpenAI-compatible API (internal DNS: `vllm.llasta.cluster.local:8000`).
-- Chatbot FastAPI + HTML/JS frontend orchestrating requests to vLLM (local first, then K8s).
-- RAG component (ingestion + FAISS wrapper + chatbot-RAG) for contextual augmentation.
+- **Kubernetes EKS on AWS** with a **multi-node architecture**:
+  - **1 GPU node** (g5.xlarge) dedicated to vLLM
+  - **1 CPU node** (t3.2xlarge, 32GB RAM) for all other workloads (faiss-wrap, chatbot, jobs)
+  - EBS storage for model weights and FAISS data
+- **vLLM** deployed in the cluster, exposing an OpenAI-compatible API (internal DNS: `vllm.llasta.cluster.local:8000`).
+- **Chatbot** FastAPI + HTML/JS frontend orchestrating requests to vLLM (local first, then K8s).
+- **RAG component** (ingestion + FAISS wrapper + chatbot-RAG) for contextual augmentation.
 - Roadmap: monitoring (Prometheus/Grafana or CloudWatch), LoRA fine-tuning, function calling, code execution.
 
 
