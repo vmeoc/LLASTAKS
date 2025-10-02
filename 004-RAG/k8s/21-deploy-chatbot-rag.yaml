@@ -14,11 +14,15 @@ spec:
     metadata:
       labels:
         app: chatbot-rag
+      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portNumber: "8080"
+        k8s.grafana.com/metrics.path: "/metrics"
     spec:
       # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: chatbot-rag
-          image: vmeoc/chatbot-rag:v3.3
+          image: vmeoc/chatbot-rag:v4.3
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

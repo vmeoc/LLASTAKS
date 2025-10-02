@@ -15,7 +15,7 @@ Notes for students:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
@@ -24,14 +24,78 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+# Prometheus metrics
+from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
+# ---------------------------
+# Prometheus Metrics
+# ---------------------------
+
+# Créer un registre personnalisé pour éviter les conflits lors du reload
+metrics_registry = CollectorRegistry()
+
+# Counter pour le nombre total de requêtes entrantes
+chatbot_requests_total = Counter(
+    'chatbot_requests_total',
+    'Total number of incoming chat requests',
+    ['endpoint', 'status'],  # Labels: endpoint (/api/chat), status (success/error)
+    registry=metrics_registry
+)
+
+# Counter pour les requêtes vers vLLM
+chatbot_vllm_requests_total = Counter(
+    'chatbot_vllm_requests_total',
+    'Total number of requests sent to vLLM',
+    ['status'],  # Labels: status (success/error)
+    registry=metrics_registry
+)
+
+# Counter pour les requêtes vers FAISS
+chatbot_faiss_requests_total = Counter(
+    'chatbot_faiss_requests_total',
+    'Total number of requests sent to FAISS',
+    ['status'],  # Labels: status (success/error)
+    registry=metrics_registry
+)
+
+# Histogram pour la latence des requêtes
+chatbot_request_duration_seconds = Histogram(
+    'chatbot_request_duration_seconds',
+    'Duration of chat requests in seconds',
+    ['endpoint'],
+    registry=metrics_registry
+)
+
+# Initialiser les métriques avec des labels par défaut (pour qu'elles apparaissent dans /metrics)
+# Cela permet à Grafana de les détecter même sans trafic
+chatbot_requests_total.labels(endpoint='/api/chat', status='received')
+chatbot_requests_total.labels(endpoint='/api/chat', status='success')
+chatbot_requests_total.labels(endpoint='/api/chat', status='error')
+chatbot_vllm_requests_total.labels(status='success')
+chatbot_vllm_requests_total.labels(status='error')
+chatbot_faiss_requests_total.labels(status='success')
+chatbot_faiss_requests_total.labels(status='error')
+
 # ---------------------------
 # Configuration (env vars)
 # ---------------------------
 
 # Determine paths relative to this script's location
+# Support both local development and Docker deployment
 SCRIPT_DIR = Path(__file__).parent.absolute()
-PROJECT_ROOT = SCRIPT_DIR.parent  # chatbot-RAG/
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+# Détection automatique de l'environnement
+if (SCRIPT_DIR / "frontend").exists():
+    # Environnement Docker: main.py est à /app/, frontend à /app/frontend/
+    PROJECT_ROOT = SCRIPT_DIR  # /app/
+    FRONTEND_DIR = SCRIPT_DIR / "frontend"
+    print(f"🐳 Docker environment detected")
+else:
+    # Environnement local: main.py est à backend/, frontend à ../frontend/
+    PROJECT_ROOT = SCRIPT_DIR.parent  # chatbot-RAG/
+    FRONTEND_DIR = PROJECT_ROOT / "frontend"
+    print(f"💻 Local environment detected")
+
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8080"))
 
@@ -101,43 +165,40 @@ async def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> List[Dict[str,
     Returns a list of {text, metadata, score} dicts. On failure, returns [].
     """
     global http_client
-    print(f"🔍 RAG SEARCH: query='{query}', top_k={top_k}")
+    print(f"🔍 RAG: Searching for '{query[:50]}{'...' if len(query) > 50 else ''}' (top_k={top_k})")
     
     try:
         url = f"{FAISS_WRAP_URL}/search"
         payload = {"query": query, "top_k": top_k}
-        print(f"🔍 Sending request to: {url}")
-        print(f"🔍 Payload: {payload}")
         
         resp = await http_client.post(url, json=payload)
-        print(f"🔍 Response status: {resp.status_code}")
         
         if resp.status_code != 200:
             error_text = await _safe_text(resp)
-            print(f"⚠️ faiss-wrap search non-200: {resp.status_code} - {error_text}")
+            print(f"⚠️ FAISS error {resp.status_code}: {error_text[:100]}")
+            chatbot_faiss_requests_total.labels(status='error').inc()
             return []
             
         data = resp.json()
-        print(f"🔍 Raw response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-        
         results = data.get("results", []) if isinstance(data, dict) else []
-        print(f"🔍 Retrieved {len(results)} results from FAISS")
         
-        # Log each result in detail
-        for i, result in enumerate(results):
-            print(f"   Result {i+1}:")
-            print(f"     Score: {result.get('score', 'N/A')}")
-            print(f"     Text length: {len(result.get('text', ''))}")
-            print(f"     Metadata: {result.get('metadata', {})}")
-            text_preview = (result.get('text', '') or '')[:150]
-            print(f"     Text preview: {text_preview}...")
+        # Incrémenter le compteur de succès FAISS
+        chatbot_faiss_requests_total.labels(status='success').inc()
+        
+        if results:
+            print(f"✅ FAISS: Retrieved {len(results)} chunks")
+        else:
+            print(f"📦 FAISS: No results found")
         
         return results
         
+    except httpx.ConnectError:
+        print(f"⚠️ FAISS unavailable at {FAISS_WRAP_URL} - continuing without RAG")
+        chatbot_faiss_requests_total.labels(status='error').inc()
+        return []
     except Exception as e:
-        print(f"⚠️ faiss-wrap search error: {e}")
-        import traceback
-        print(f"⚠️ Full traceback: {traceback.format_exc()}")
+        print(f"⚠️ FAISS error: {type(e).__name__}: {str(e)[:100]}")
+        chatbot_faiss_requests_total.labels(status='error').inc()
         return []
 
 async def _safe_text(response: httpx.Response) -> str:
@@ -152,10 +213,7 @@ def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CO
     We include simple source hints for transparency.
     """
     if not results:
-        print("📝 No RAG results - empty context block")
         return ""
-    
-    print(f"📝 Building context block from {len(results)} RAG results (limit: {limit_chars} chars)")
     
     lines: List[str] = ["You have access to the following context passages. Cite them when relevant.\n"]
     running = 0
@@ -166,31 +224,19 @@ def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CO
         meta = r.get("metadata") or {}
         src = meta.get("source") or meta.get("file") or meta.get("s3_key") or "unknown"
         page = meta.get("page")
-        score = r.get("score", "N/A")
         
         header = f"[{i}] Source: {src}{' p.' + str(page) if page is not None else ''}"
         snippet = f"{header}\n{text}\n"
         
-        # Log each chunk being considered
-        print(f"   Chunk {i}: score={score}, text_len={len(text)}, source={src}, page={page}")
-        print(f"   Text preview: {text[:100]}...")
-        
         if running + len(snippet) > limit_chars:
-            print(f"   ⚠️ Chunk {i} would exceed limit ({running + len(snippet)} > {limit_chars}) - stopping")
             break
             
         lines.append(snippet)
         running += len(snippet)
         included_chunks += 1
-        print(f"   ✅ Chunk {i} included (running total: {running} chars)")
     
     context_block = "\n".join(lines).strip()
-    
-    print(f"📝 Context block built: {included_chunks}/{len(results)} chunks, {len(context_block)} chars total")
-    print(f"📄 COMPLETE CONTEXT BLOCK:")
-    print("=" * 60)
-    print(context_block)
-    print("=" * 60)
+    print(f"📝 RAG: Built context with {included_chunks}/{len(results)} chunks ({len(context_block)} chars)")
     
     return context_block
 
@@ -200,10 +246,7 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
     We avoid modifying user content to preserve intent. If context is empty, return as-is.
     """
     if not context_block:
-        print("💬 No context to inject - returning original messages")
         return messages
-    
-    print(f"💬 Injecting context into messages (context length: {len(context_block)} chars)")
     
     system_msg = {
         "role": "system",
@@ -215,14 +258,9 @@ def inject_context_into_messages(messages: List[Dict[str, str]], context_block: 
     
     # Prepend or insert after an existing system message
     if messages and messages[0].get("role") == "system":
-        print("💬 Found existing system message - inserting RAG context after it")
         final_messages = [messages[0], system_msg] + messages[1:]
     else:
-        print("💬 No existing system message - prepending RAG context")
         final_messages = [system_msg] + messages
-    
-    print(f"💬 Final message structure: {[msg['role'] for msg in final_messages]}")
-    print(f"💬 System message with RAG context length: {len(system_msg['content'])} chars")
     
     return final_messages
 
@@ -232,34 +270,22 @@ def parse_thinking_content(response_text: str) -> tuple[str, str]:
     Parse LLM response to separate thinking content from final answer.
     Returns (thinking_content, final_content)
     """
-    # Log the parsing process for debugging
-    print(f"🧠 Parsing response of {len(response_text)} chars")
-    
-    # Look for </think> tag to separate thinking from final content
     think_end_tag = "</think>"
     
     if think_end_tag in response_text:
-        # Find the last occurrence of </think>
         think_end_index = response_text.rfind(think_end_tag)
         if think_end_index != -1:
-            # Extract thinking content (everything before and including </think>)
             thinking_content = response_text[:think_end_index + len(think_end_tag)].strip()
-            # Extract final content (everything after </think>)
             final_content = response_text[think_end_index + len(think_end_tag):].strip()
             
-            # Remove <think> opening tag from thinking content for cleaner display
+            # Remove <think> tags for cleaner display
             if thinking_content.startswith("<think>"):
-                thinking_content = thinking_content[7:]  # Remove "<think>"
+                thinking_content = thinking_content[7:]
             if thinking_content.endswith("</think>"):
-                thinking_content = thinking_content[:-8]  # Remove "</think>"
-            
-            print(f"🧠 Found thinking content: {len(thinking_content)} chars")
-            print(f"🧠 Final content: {len(final_content)} chars")
+                thinking_content = thinking_content[:-8]
             
             return thinking_content.strip(), final_content.strip()
     
-    # If no </think> tag found, return empty thinking and full content
-    print("🧠 No </think> tag found, returning full content")
     return "", response_text.strip()
 
 # ---------------------------
@@ -293,104 +319,124 @@ async def health_check():
         rag_status = f"error: {str(e)}"
     return {"status": "healthy", "vllm": vllm_status, "faiss_wrap": rag_status}
 
+@app.get("/metrics")
+async def metrics():
+    """
+    Expose Prometheus metrics endpoint.
+    This endpoint will be scraped by Grafana Alloy.
+    """
+    return Response(content=generate_latest(metrics_registry), media_type=CONTENT_TYPE_LATEST)
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    try:
-        # Convert Pydantic objects to dicts for vLLM
-        base_messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    # Incrémenter le compteur de requêtes entrantes
+    chatbot_requests_total.labels(endpoint='/api/chat', status='received').inc()
+    
+    # Mesurer la durée de la requête
+    with chatbot_request_duration_seconds.labels(endpoint='/api/chat').time():
+        try:
+            # Convert Pydantic objects to dicts for vLLM
+            base_messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-        # Retrieve optional context using the latest user message
-        last_user_msg = next((m["content"] for m in reversed(base_messages) if m["role"] == "user"), None)
-        print(f"🎯 RAG FLOW START: User query = '{last_user_msg}'")
-        
-        retrieved = []
-        if last_user_msg:
-            retrieved = await retrieve_context(last_user_msg, top_k=RAG_TOP_K)
-        else:
-            print("⚠️ No user message found for RAG retrieval")
+            # Retrieve optional context using the latest user message
+            last_user_msg = next((m["content"] for m in reversed(base_messages) if m["role"] == "user"), None)
             
-        context_block = build_context_block(retrieved)
-        messages_for_vllm = inject_context_into_messages(base_messages, context_block)
-        
-        print(f"🎯 RAG FLOW SUMMARY:")
-        print(f"   Query: '{last_user_msg}'")
-        print(f"   Retrieved chunks: {len(retrieved)}")
-        print(f"   Context block length: {len(context_block)} chars")
-        print(f"   Final messages count: {len(messages_for_vllm)}")
-        print(f"   RAG enabled: {'YES' if context_block else 'NO'}")
+            retrieved = []
+            if last_user_msg:
+                retrieved = await retrieve_context(last_user_msg, top_k=RAG_TOP_K)
+                
+            context_block = build_context_block(retrieved)
+            messages_for_vllm = inject_context_into_messages(base_messages, context_block)
 
-        # Apply think/no_think to the last user message (align with 003-chatbot behavior)
-        # We do this AFTER injecting the optional context system message so the index is correct.
-        last_user_idx = None
-        for i in range(len(messages_for_vllm) - 1, -1, -1):
-            if messages_for_vllm[i].get("role") == "user":
-                last_user_idx = i
-                break
-        if last_user_idx is not None:
-            content = messages_for_vllm[last_user_idx].get("content", "")
-            if isinstance(content, str) and "/no_think" not in content:
-                if request.think_mode:
-                    messages_for_vllm[last_user_idx]["content"] = content.rstrip()
-                else:
-                    messages_for_vllm[last_user_idx]["content"] = content.rstrip() + " /no_think"
+            # Apply think/no_think to the last user message (align with 003-chatbot behavior)
+            # We do this AFTER injecting the optional context system message so the index is correct.
+            last_user_idx = None
+            for i in range(len(messages_for_vllm) - 1, -1, -1):
+                if messages_for_vllm[i].get("role") == "user":
+                    last_user_idx = i
+                    break
+            if last_user_idx is not None:
+                content = messages_for_vllm[last_user_idx].get("content", "")
+                if isinstance(content, str) and "/no_think" not in content:
+                    if request.think_mode:
+                        messages_for_vllm[last_user_idx]["content"] = content.rstrip()
+                    else:
+                        messages_for_vllm[last_user_idx]["content"] = content.rstrip() + " /no_think"
 
-        # Pas de limite de tokens pour les tests
-        effective_max_tokens = request.max_tokens  # None = pas de limite
-        print(f"🎯 Max tokens: {effective_max_tokens or 'unlimited'} (think_mode={request.think_mode})")
+            # Pas de limite de tokens pour les tests
+            effective_max_tokens = request.max_tokens  # None = pas de limite
 
-        vllm_request = {
-            "model": VLLM_MODEL_NAME,
-            "messages": messages_for_vllm,
-            "stream": request.stream,
-            "max_tokens": effective_max_tokens,  # None = pas de limite
-            "temperature": request.temperature,
-            # Qwen-friendly defaults
-            "top_p": 0.8,
-            "top_k": 20,
-            "presence_penalty": 0.0,
-        }
+            vllm_request = {
+                "model": VLLM_MODEL_NAME,
+                "messages": messages_for_vllm,
+                "stream": request.stream,
+                "max_tokens": effective_max_tokens,  # None = pas de limite
+                "temperature": request.temperature,
+                # Qwen-friendly defaults
+                "top_p": 0.8,
+                "top_k": 20,
+                "presence_penalty": 0.0,
+            }
 
-        print(
-            f"📤 To vLLM: {len(messages_for_vllm)} msgs | RAG={'on' if context_block else 'off'} "
-            f"(retrieved={len(retrieved)})"
-        )
+            print(f"📤 vLLM: {len(messages_for_vllm)} msgs | RAG={'ON' if context_block else 'OFF'}")
 
-        if request.stream:
-            return StreamingResponse(
-                stream_chat_response(vllm_request),
-                media_type="text/plain",
-            )
-        else:
-            response = await http_client.post(
-                f"{VLLM_BASE_URL}/v1/chat/completions",
-                json=vllm_request,
-                headers={"Authorization": f"Bearer {VLLM_API_KEY}"},
-            )
-            response.raise_for_status()
-            result = response.json()
-            raw_content = result["choices"][0]["message"]["content"]
-            
-            # Log response length and first 200 characters for debugging
-            print(f"🔍 LLM Response length: {len(raw_content)} chars")
-            print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
-            print(f"🔍 LLM Response (last 100 chars): {raw_content[-100:] if len(raw_content) > 100 else 'N/A'}")
-            
-            thinking_content, final_content = parse_thinking_content(raw_content)
-            return ChatResponse(
-                message=ChatMessage(
-                    role="assistant",
-                    content=final_content,
-                ),
-                thinking_content=thinking_content if thinking_content else None,
-                usage=result.get("usage", {}),
-            )
+            if request.stream:
+                # Incrémenter le compteur de succès pour les requêtes entrantes
+                chatbot_requests_total.labels(endpoint='/api/chat', status='success').inc()
+                return StreamingResponse(
+                    stream_chat_response(vllm_request),
+                    media_type="text/plain",
+                )
+            else:
+                try:
+                    response = await http_client.post(
+                        f"{VLLM_BASE_URL}/v1/chat/completions",
+                        json=vllm_request,
+                        headers={"Authorization": f"Bearer {VLLM_API_KEY}"},
+                    )
+                    response.raise_for_status()
+                    
+                    # Incrémenter le compteur de succès vLLM
+                    chatbot_vllm_requests_total.labels(status='success').inc()
+                    
+                    result = response.json()
+                    raw_content = result["choices"][0]["message"]["content"]
+                    
+                    # Log de la réponse brute de vLLM
+                    print(f"🔍 LLM Response length: {len(raw_content)} chars")
+                    print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
+                    if len(raw_content) > 100:
+                        print(f"🔍 LLM Response (last 100 chars): {raw_content[-100:]}")
+                    
+                    thinking_content, final_content = parse_thinking_content(raw_content)
+                    
+                    # Log du parsing
+                    print(f"🧠 Parsing: thinking={len(thinking_content)} chars, final={len(final_content)} chars")
+                    
+                    # Incrémenter le compteur de succès pour les requêtes entrantes
+                    chatbot_requests_total.labels(endpoint='/api/chat', status='success').inc()
+                    
+                    return ChatResponse(
+                        message=ChatMessage(
+                            role="assistant",
+                            content=final_content,
+                        ),
+                        thinking_content=thinking_content if thinking_content else None,
+                        usage=result.get("usage", {}),
+                    )
+                except httpx.HTTPStatusError as vllm_error:
+                    # Incrémenter le compteur d'erreurs vLLM
+                    chatbot_vllm_requests_total.labels(status='error').inc()
+                    raise vllm_error
 
-    except httpx.HTTPStatusError as e:
-        print(f"❌ vLLM HTTP error: {e.response.status_code} - {e.response.text}")
-        raise HTTPException(status_code=e.response.status_code, detail=f"vLLM error: {e.response.text}")
-    except Exception as e:
-        print(f"❌ Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        except httpx.HTTPStatusError as e:
+            print(f"❌ vLLM error {e.response.status_code}: {e.response.text[:100]}")
+            chatbot_requests_total.labels(endpoint='/api/chat', status='error').inc()
+            raise HTTPException(status_code=e.response.status_code, detail=f"vLLM error: {e.response.text}")
+        except Exception as e:
+            print(f"❌ Error: {type(e).__name__}: {str(e)[:100]}")
+            chatbot_requests_total.labels(endpoint='/api/chat', status='error').inc()
+            raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 async def stream_chat_response(vllm_request: Dict[str, Any]):
     try:

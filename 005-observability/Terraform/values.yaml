@@ -28,6 +28,8 @@ clusterMetrics:
         existingSecretName: grafana-cloud-metrics-grafana-k8s-monitoring
   kepler:
     enabled: true
+annotationAutodiscovery:
+  enabled: true
 clusterEvents:
   enabled: true
 podLogs:

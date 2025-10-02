@@ -1,5 +1,12 @@
 FROM python:3.11-slim
 
+#LABEL
+LABEL org.opencontainers.image.title="Chatbot RAG"
+LABEL org.opencontainers.image.description="Chatbot RAG avec Qwen3 et FAISS"
+LABEL org.opencontainers.image.source="https://github.com/vmeoc/llasta"
+LABEL changelog="Added monitoring with Prometheus"
+
+
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

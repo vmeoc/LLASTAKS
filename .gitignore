@@ -7,3 +7,4 @@ Project.md
 **/__pycache__/
 005-observability/Terraform/vars.tf
 005-observability/EXPLICATION_TERRAFORM.md
+005-observability/PHASE2_INSTRUMENTATION.md

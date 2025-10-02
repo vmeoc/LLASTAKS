@@ -7,7 +7,7 @@ Bring visibility on the following layers through metrics, logs, trace:
 
 ## stack used
 
-I will use the cloud service of Grafana to leverage the LGTM stack (Loki, Grafana, Tempo, Mimir).
+I will use the cloud service of Grafana with the LGTM stack (Loki, Grafana, Tempo, Mimir):
 Grafana = visualization
 Loki = logs aggregator
 Mimir = Metrics aggregator
@@ -15,7 +15,24 @@ Tempo = trace aggregator
 
 ## How to implement it
 Open a free account on grafana.com and follow the instruction.
+To deploy the Grafana Alloy agents
 
+```
+cd Terraform
+Terraform init
+Terraform apply
+```
+
+Go to Grafana\Testing & Synthetics\Kubernetes
+
+The Alloy agent scan all pods configuration for the annotation
+      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portNumber: "8080"
+        k8s.grafana.com/metrics.path: "/metrics"
+
+If the pod provide the /metrics route, Alloy will scrape all the data every 15 seconds. 
+Log to the grafana.net URL and go to explore/query Less to view all the metrics.
 
 ## details of the metrics
 
