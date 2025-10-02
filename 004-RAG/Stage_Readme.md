@@ -2,7 +2,24 @@
 
 Stand up a **simple, reliable, low‑cost** RAG V1 on EKS with vLLM (Qwen3‑8B INT4) for generation, **FAISS** for retrieval, and a **reranker** for quality.
 
+We want:
+- Understand how RAG works from the ingest phase to the retrieval phase, 
+- what are his limitations,
+- how it works in conjunction with the LLM and how the LLM "intelligence" contribute to the end result
+
+For this:
+- setup the wrapped FAISS service & RAG chatbot by following below instructions
+- analyse the output of ingest.py for the PDF/Hard to read... & reflect on it
+- analyse the output of ingest.py for the PDF/Easy to read... & reflect on it
+- Ingest PDF/Easy to read...in FAISS and test the RAG. What happens? Do the same test in large LLMs such as GPT 5. What does it tell us?
+- Reset FAISS & Ingest PDF/build your own electric car. Reflect on this.
+
 ---
+
+
+
+
+
 
 ## Logical architecture
 
@@ -250,7 +267,12 @@ curl -X POST http://localhost:9000/search \
 Open http://localhost:8080 and ask about Q1 revenue. The backend will inject retrieved context when available.
 
 
+8) **Reset FAISS**
 
+After connecting through port-forward:
+```bash
+curl -X POST http://localhost:9000/reset
+```
 ---
 
 ## Initial parameters (recommended)

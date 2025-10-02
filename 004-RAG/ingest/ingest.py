@@ -35,6 +35,7 @@ Processing Options:
   --batch-size             Upsert batch size (default: 64)
   --max-parallel           Parallel downloads/processing (default: 4)
   --preview-chars          Characters to preview in logs (default: 80)
+  --max-chunks             Limit the number of chunks to upsert (0 = no limit)
 
 FAISS Integration:
   --faiss-wrap-url         faiss-wrap base URL (default: http://localhost:18080)
@@ -314,6 +315,7 @@ def main():
     parser.add_argument("--max-parallel", type=int, default=4, help="Parallel downloads")
     parser.add_argument("--http-timeout", type=float, default=300.0, help="Timeout in seconds for each /upsert HTTP request")
     parser.add_argument("--preview-chars", type=int, default=80, help="Number of characters to preview from each text in logs")
+    parser.add_argument("--max-chunks", type=int, default=0, help="Maximum number of chunks to upsert (0 means no limit)")
     parser.add_argument("--dry-run", action="store_true", help="Show extracted data without sending to FAISS")
     parser.add_argument("pdf_files", nargs="*", help="Local PDF files to process (alternative to S3)")
     args = parser.parse_args()
@@ -365,6 +367,14 @@ def main():
             all_chunks.extend(chunks)
 
     print(f"Prepared {len(all_chunks)} chunks after cleaning/dedupe.")
+
+    # Apply optional cap on number of chunks to send (non-dry-run only)
+    if not args.dry_run and args.max_chunks and args.max_chunks > 0:
+        if len(all_chunks) > args.max_chunks:
+            print(f"Limiting to the first {args.max_chunks} chunks (out of {len(all_chunks)}) before upsert…")
+            all_chunks = all_chunks[: args.max_chunks]
+        else:
+            print(f"--max-chunks set to {args.max_chunks}, but only {len(all_chunks)} chunks prepared. Proceeding with all.")
 
     # Dry-run mode: show extracted data without sending to FAISS
     if args.dry_run:
