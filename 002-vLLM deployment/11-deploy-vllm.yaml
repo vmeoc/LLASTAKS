@@ -9,6 +9,10 @@ spec:
   template:
     metadata:
       labels: { app: vllm-qwen3 }
+      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portNumber: "8000"
+        k8s.grafana.com/metrics.path: "/metrics"
     spec:
       enableServiceLinks: false
       # Forcer le déploiement sur le nœud GPU uniquement

@@ -22,7 +22,7 @@ spec:
       # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: chatbot-rag
-          image: vmeoc/chatbot-rag:v4.3
+          image: vmeoc/chatbot-rag:v4.5
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

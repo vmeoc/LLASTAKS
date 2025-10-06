@@ -14,11 +14,15 @@ spec:
     metadata:
       labels:
         app: faiss-wrap
+      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portNumber: "9000"
+        k8s.grafana.com/metrics.path: "/metrics"
     spec:
       # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: faiss-wrap
-          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3
+          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3.1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9000

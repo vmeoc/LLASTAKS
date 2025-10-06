@@ -59,21 +59,25 @@ For this:
 
 > For **bank statements**: start simple (standard split). If relevance is mediocre → switch to **tabular slicing** (1 chunk = 1 transaction), which performs much better on that data shape.
 
----
 
 ## Query flow (Chatbot)
 
 1. **Query cleaning** (Qwen3) → rewrites the query in basic terms.
 2. `POST /search` (cleaned text, k=20) → faiss‑wrap **embed(query)** + search (IndexFlatIP/L2 for exhaustive V1).
-3. Local **rerank** (bge‑reranker‑v2‑m3) over k passages → keep **m=5**.
-4. **Stuff**: concat the 5 passages + user prompt → vLLM Qwen3‑8B.
-5. Answer **+ citations** (source\_uri/page/score).
+3. **Similarity filtering**: Filter results by score threshold (RAG_MIN_SCORE, default 0.5) to remove irrelevant chunks.
+4. Local **rerank** (bge‑reranker‑v2‑m3) over filtered passages → keep **m=5**.
+5. **Stuff**: concat the 5 passages + user prompt → vLLM Qwen3‑8B.
+6. Answer **+ citations** (source\_uri/page/score).
 
 **Default settings**
 
-* Chunk: **1 page = 1 chunk** (page‑by‑page, overlap 0); k=20 → rerank → m=5; thresholded refusal for low scores.
+* Chunk: **1 page = 1 chunk** (page‑by‑page, overlap 0); k=20 → similarity filter (score >= 0.5) → rerank → m=5.
+* **Similarity threshold** (RAG_MIN_SCORE): Filters FAISS results before reranking
+  * 0.3-0.4: Permissive (more chunks, potential noise)
+  * 0.5-0.6: Balanced (recommended, default 0.5)
+  * 0.7-0.8: Strict (only highly relevant chunks)
 * Final context size: 1.5k–2.5k tokens of passages to keep generation budget.
-* LLM rules: always cite sources; say “I don’t know” below threshold; avoid hallucinations.
+* LLM rules: always cite sources; say "I don't know" below threshold; avoid hallucinations.
 
 ---
 

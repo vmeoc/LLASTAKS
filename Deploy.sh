@@ -172,6 +172,9 @@ print_status "Waiting for vLLM pod to be ready (this may take 5-10 minutes)..."
 kubectl wait --for=condition=ready pod -l app=vllm-qwen3 -n llasta --timeout=600s
 check_success "vLLM pod readiness"
 
+# Navigate to Rag Chatbot deployment directory
+cd "../004-RAG/k8s" || { print_error "Cannot find Rag Chatbot deployment directory"; exit 1; }
+
 # Deploy Rag chatbot (optional)
 print_status "Deploying Rag chatbot stack..."
 kubectl apply -f 10-pv-pvc-models.yaml

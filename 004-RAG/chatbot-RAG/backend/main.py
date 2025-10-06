@@ -7,10 +7,21 @@ with optional RAG retrieval from the faiss-wrap service.
 Architecture:
 Frontend (HTML/JS) ↔ Backend (FastAPI) ↔ [RAG: faiss-wrap] ↔ vLLM (OpenAI compatible)
 
+RAG Similarity Filtering:
+- FAISS returns top-k chunks (default k=5) based on vector similarity
+- We filter results using a similarity score threshold (RAG_MIN_SCORE, default 0.5)
+- Only chunks with score >= threshold are sent to the LLM as context
+- This prevents irrelevant chunks from polluting the context window
+- Adjust RAG_MIN_SCORE via environment variable:
+  * 0.3-0.4: Permissive (more chunks, risk of noise)
+  * 0.5-0.6: Balanced (recommended)
+  * 0.7-0.8: Strict (only highly relevant chunks)
+
 Notes for students:
 - We keep the base chatbot behavior. If RAG is unavailable, the app still works.
 - We insert retrieved context as a system message before user/assistant turns.
 - All external calls use a single shared httpx.AsyncClient for performance.
+- Similarity scores are logged for debugging and monitoring.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -66,6 +77,21 @@ chatbot_request_duration_seconds = Histogram(
     registry=metrics_registry
 )
 
+# Histogramme pour le nombre de chunks RAG envoyés au LLM
+chatbot_rag_chunks_sent = Histogram(
+    'chatbot_rag_chunks_sent',
+    'Number of RAG chunks sent to LLM per request',
+    buckets=[0, 1, 2, 3, 5, 10, 20],
+    registry=metrics_registry
+)
+
+# Counter pour le nombre total de chunks RAG envoyés
+chatbot_rag_chunks_total = Counter(
+    'chatbot_rag_chunks_total',
+    'Total number of RAG chunks sent to LLM',
+    registry=metrics_registry
+)
+
 # Initialiser les métriques avec des labels par défaut (pour qu'elles apparaissent dans /metrics)
 # Cela permet à Grafana de les détecter même sans trafic
 chatbot_requests_total.labels(endpoint='/api/chat', status='received')
@@ -75,6 +101,10 @@ chatbot_vllm_requests_total.labels(status='success')
 chatbot_vllm_requests_total.labels(status='error')
 chatbot_faiss_requests_total.labels(status='success')
 chatbot_faiss_requests_total.labels(status='error')
+
+# Initialiser les métriques RAG chunks (observer 0 pour créer les buckets)
+chatbot_rag_chunks_sent.observe(0)
+chatbot_rag_chunks_total.inc(0)  # inc(0) initialise le counter à 0
 
 # ---------------------------
 # Configuration (env vars)
@@ -107,6 +137,7 @@ VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen3-8B")
 # faiss-wrap connection (RAG). Example when port-forwarded locally: http://localhost:9000
 FAISS_WRAP_URL = os.getenv("FAISS_WRAP_URL", "http://localhost:9000")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+RAG_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.5"))  # Seuil de similarité minimum (0-1)
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "4000"))  # cap stuffed context
 
 # ---------------------------
@@ -182,15 +213,21 @@ async def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> List[Dict[str,
         data = resp.json()
         results = data.get("results", []) if isinstance(data, dict) else []
         
+        # Filtrer par score de similarité (ne garder que les chunks pertinents)
+        filtered_results = [r for r in results if r.get("score", 0) >= RAG_MIN_SCORE]
+        
         # Incrémenter le compteur de succès FAISS
         chatbot_faiss_requests_total.labels(status='success').inc()
         
-        if results:
-            print(f"✅ FAISS: Retrieved {len(results)} chunks")
+        if filtered_results:
+            print(f"✅ FAISS: Retrieved {len(filtered_results)}/{len(results)} chunks (score >= {RAG_MIN_SCORE})")
+            # Log des scores pour debug
+            scores = [r.get("score", 0) for r in filtered_results]
+            print(f"📊 Scores: min={min(scores):.3f}, max={max(scores):.3f}, avg={sum(scores)/len(scores):.3f}")
         else:
-            print(f"📦 FAISS: No results found")
+            print(f"📦 FAISS: No results above threshold (min_score={RAG_MIN_SCORE})")
         
-        return results
+        return filtered_results
         
     except httpx.ConnectError:
         print(f"⚠️ FAISS unavailable at {FAISS_WRAP_URL} - continuing without RAG")
@@ -207,13 +244,14 @@ async def _safe_text(response: httpx.Response) -> str:
     except Exception:
         return "<no text>"
 
-def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CONTEXT_CHARS) -> str:
+def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CONTEXT_CHARS) -> tuple[str, int]:
     """
     Build a compact context block from search results.
     We include simple source hints for transparency.
+    Returns (context_block, num_chunks_included)
     """
     if not results:
-        return ""
+        return "", 0
     
     lines: List[str] = ["You have access to the following context passages. Cite them when relevant.\n"]
     running = 0
@@ -238,7 +276,7 @@ def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CO
     context_block = "\n".join(lines).strip()
     print(f"📝 RAG: Built context with {included_chunks}/{len(results)} chunks ({len(context_block)} chars)")
     
-    return context_block
+    return context_block, included_chunks
 
 def inject_context_into_messages(messages: List[Dict[str, str]], context_block: str) -> List[Dict[str, str]]:
     """
@@ -345,8 +383,12 @@ async def chat_endpoint(request: ChatRequest):
             if last_user_msg:
                 retrieved = await retrieve_context(last_user_msg, top_k=RAG_TOP_K)
                 
-            context_block = build_context_block(retrieved)
+            context_block, num_chunks_sent = build_context_block(retrieved)
             messages_for_vllm = inject_context_into_messages(base_messages, context_block)
+            
+            # Enregistrer le nombre de chunks réellement envoyés au LLM
+            chatbot_rag_chunks_sent.observe(num_chunks_sent)
+            chatbot_rag_chunks_total.inc(num_chunks_sent)
 
             # Apply think/no_think to the last user message (align with 003-chatbot behavior)
             # We do this AFTER injecting the optional context system message so the index is correct.

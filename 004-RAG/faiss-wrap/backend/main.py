@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import PlainTextResponse
 
 import os
@@ -50,10 +50,37 @@ MODEL_NAME = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 EMBED_DIM = None  # will be set after model loads
 
 # Prometheus metrics
-REQ_COUNTER = Counter("faiss_wrap_requests_total", "Total requests", ["endpoint"]) 
+
+# Compteurs de requêtes par endpoint
+REQ_COUNTER = Counter("faiss_wrap_requests_total", "Total requests", ["endpoint", "status"]) 
+
+# Latence des requêtes
 REQ_LAT = Histogram("faiss_wrap_request_latency_seconds", "Request latency", ["endpoint"]) 
+
+# Compteurs d'opérations
 UPSERT_COUNTER = Counter("faiss_wrap_upserts_total", "Total items upserted")
 SEARCH_COUNTER = Counter("faiss_wrap_search_total", "Total searches")
+SEARCH_RESULTS_COUNTER = Counter("faiss_wrap_search_results_total", "Total search results returned")
+
+# Gauges pour l'état actuel
+INDEX_SIZE_GAUGE = Gauge("faiss_wrap_index_size", "Number of vectors in FAISS index")
+METADATA_SIZE_GAUGE = Gauge("faiss_wrap_metadata_size", "Number of metadata entries")
+EMBED_DIM_GAUGE = Gauge("faiss_wrap_embedding_dimension", "Embedding dimension")
+
+# Histogramme pour la distribution du nombre de résultats
+SEARCH_RESULTS_HISTOGRAM = Histogram(
+    "faiss_wrap_search_results_count",
+    "Distribution of number of results returned per search",
+    buckets=[0, 1, 2, 3, 5, 10, 20, 50]
+)
+
+# Initialiser les labels par défaut
+REQ_COUNTER.labels(endpoint="health", status="success")
+REQ_COUNTER.labels(endpoint="upsert", status="success")
+REQ_COUNTER.labels(endpoint="upsert", status="error")
+REQ_COUNTER.labels(endpoint="search", status="success")
+REQ_COUNTER.labels(endpoint="search", status="error")
+REQ_COUNTER.labels(endpoint="reset", status="success")
 
 # Global components
 app = FastAPI(title="faiss-wrap", version="1.0.0")
@@ -100,6 +127,12 @@ async def lifespan(app: FastAPI):
 
     # Normalize flag for cosine similarity using inner product
     faiss.normalize_L2  # touch to ensure symbol import
+    
+    # Initialiser les gauges Prometheus
+    INDEX_SIZE_GAUGE.set(_index.ntotal)
+    METADATA_SIZE_GAUGE.set(len(_meta_df))
+    EMBED_DIM_GAUGE.set(EMBED_DIM)
+    
     print(f"✅ Ready. Dim={EMBED_DIM}, items={len(_meta_df)}. Startup took {time.time()-t0:.1f}s")
     yield
     # Persist on shutdown
@@ -111,8 +144,16 @@ app.router.lifespan_context = lifespan
 
 @app.get("/health")
 def health():
-    REQ_COUNTER.labels("health").inc()
-    return {"status": "healthy", "model": MODEL_NAME, "items": int(len(_meta_df) if _meta_df is not None else 0)}
+    REQ_COUNTER.labels(endpoint="health", status="success").inc()
+    index_size = _index.ntotal if _index is not None else 0
+    metadata_size = len(_meta_df) if _meta_df is not None else 0
+    return {
+        "status": "healthy",
+        "model": MODEL_NAME,
+        "index_size": int(index_size),
+        "metadata_size": int(metadata_size),
+        "embedding_dim": EMBED_DIM
+    }
 
 @app.get("/metrics")
 def metrics():
@@ -122,90 +163,113 @@ def metrics():
 def upsert(req: UpsertRequest):
     global _meta_df
     endpoint = "upsert"
-    REQ_COUNTER.labels(endpoint).inc()
     with REQ_LAT.labels(endpoint).time():
-        if _model is None or _index is None or _meta_df is None:
-            raise HTTPException(status_code=503, detail="Service not ready")
-        if not req.items:
-            return {"upserted": 0}
-        # Prepare texts and ids
-        ids = [it.id for it in req.items]
-        texts = [it.text for it in req.items]
-        metas = [it.metadata or {} for it in req.items]
-        # Compute embeddings
-        embs = _embed(texts)
-        # Normalize embeddings for cosine similarity using IP index
-        faiss.normalize_L2(embs)
-        n = len(ids)
-        with _lock:
-            # Remove duplicates by id: drop old rows and rebuild index if needed
-            existing_mask = _meta_df['id'].isin(ids)
-            if existing_mask.any():
-                # Rebuild index without existing ids (simple but clear)
-                remaining = _meta_df[~existing_mask]
-                if len(remaining) > 0:
-                    re_texts = remaining['text'].tolist()
-                    re_embs = _embed(re_texts)
-                    faiss.normalize_L2(re_embs)
-                    new_index = faiss.IndexFlatIP(embs.shape[1])
-                    new_index.add(re_embs)
-                    _replace_index(new_index)
-                    _meta_df.drop(_meta_df[existing_mask].index, inplace=True)
-                else:
-                    # Just reset empty index
-                    new_index = faiss.IndexFlatIP(embs.shape[1])
-                    _replace_index(new_index)
-                    _meta_df.drop(_meta_df.index, inplace=True)
-            # Add new vectors
-            _index.add(embs)
-            # Append metadata
-            new_df = pd.DataFrame({"id": ids, "text": texts, "metadata": metas})
-            _meta_df = pd.concat([_meta_df, new_df], ignore_index=True)
-            # Persist to disk
-            _persist()
-        UPSERT_COUNTER.inc(n)
-        return {"upserted": n, "total_items": int(len(_meta_df))}
+        try:
+            if _model is None or _index is None or _meta_df is None:
+                REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+                raise HTTPException(status_code=503, detail="Service not ready")
+            if not req.items:
+                return {"upserted": 0}
+            # Prepare texts and ids
+            ids = [it.id for it in req.items]
+            texts = [it.text for it in req.items]
+            metas = [it.metadata or {} for it in req.items]
+            # Compute embeddings
+            embs = _embed(texts)
+            # Normalize embeddings for cosine similarity using IP index
+            faiss.normalize_L2(embs)
+            n = len(ids)
+            with _lock:
+                # Remove duplicates by id: drop old rows and rebuild index if needed
+                existing_mask = _meta_df['id'].isin(ids)
+                if existing_mask.any():
+                    # Rebuild index without existing ids (simple but clear)
+                    remaining = _meta_df[~existing_mask]
+                    if len(remaining) > 0:
+                        re_texts = remaining['text'].tolist()
+                        re_embs = _embed(re_texts)
+                        faiss.normalize_L2(re_embs)
+                        new_index = faiss.IndexFlatIP(embs.shape[1])
+                        new_index.add(re_embs)
+                        _replace_index(new_index)
+                        _meta_df.drop(_meta_df[existing_mask].index, inplace=True)
+                    else:
+                        # Just reset empty index
+                        new_index = faiss.IndexFlatIP(embs.shape[1])
+                        _replace_index(new_index)
+                        _meta_df.drop(_meta_df.index, inplace=True)
+                # Add new vectors
+                _index.add(embs)
+                # Append metadata
+                new_df = pd.DataFrame({"id": ids, "text": texts, "metadata": metas})
+                _meta_df = pd.concat([_meta_df, new_df], ignore_index=True)
+                # Persist to disk
+                _persist()
+                
+                # Mettre à jour les gauges
+                INDEX_SIZE_GAUGE.set(_index.ntotal)
+                METADATA_SIZE_GAUGE.set(len(_meta_df))
+                
+            UPSERT_COUNTER.inc(n)
+            REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
+            return {"upserted": n, "total_items": int(len(_meta_df))}
+        except Exception as e:
+            REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+            raise
 
 @app.post("/search")
 def search(req: SearchRequest):
     endpoint = "search"
-    REQ_COUNTER.labels(endpoint).inc()
     SEARCH_COUNTER.inc()
     with REQ_LAT.labels(endpoint).time():
-        if _model is None or _index is None or _meta_df is None:
-            raise HTTPException(status_code=503, detail="Service not ready")
-        if not req.query.strip():
-            return {"results": []}
-        q = req.query.strip()
-        top_k = max(1, min(int(req.top_k), 50))
-        # Embed query
-        q_emb = _embed([q])
-        faiss.normalize_L2(q_emb)
-        if _index.ntotal == 0:
-            return {"results": []}
-        # Search
-        D, I = _index.search(q_emb, top_k)
-        idxs = I[0]
-        scores = D[0]
-        results = []
-        for i, score in zip(idxs, scores):
-            if i < 0 or i >= len(_meta_df):
-                continue
-            row = _meta_df.iloc[int(i)]
-            results.append({
-                "id": row["id"],
-                "text": row["text"],
-                "metadata": row.get("metadata", {}),
-                "score": float(score),
-            })
-        return {"results": results}
+        try:
+            if _model is None or _index is None or _meta_df is None:
+                REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+                raise HTTPException(status_code=503, detail="Service not ready")
+            if not req.query.strip():
+                REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
+                SEARCH_RESULTS_HISTOGRAM.observe(0)
+                return {"results": []}
+            q = req.query.strip()
+            top_k = max(1, min(int(req.top_k), 50))
+            # Embed query
+            q_emb = _embed([q])
+            faiss.normalize_L2(q_emb)
+            if _index.ntotal == 0:
+                return {"results": []}
+            # Search
+            D, I = _index.search(q_emb, top_k)
+            results = []
+            for i in range(len(I[0])):
+                idx = int(I[0][i])
+                score = float(D[0][i])
+                if idx < 0 or idx >= len(_meta_df):
+                    continue
+                row = _meta_df.iloc[idx]
+                results.append({
+                    "id": row["id"],
+                    "text": row["text"],
+                    "metadata": row.get("metadata", {}),
+                    "score": score,
+                })
+            
+            # Enregistrer le nombre de résultats retournés
+            num_results = len(results)
+            SEARCH_RESULTS_COUNTER.inc(num_results)
+            SEARCH_RESULTS_HISTOGRAM.observe(num_results)
+            REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
+            
+            return {"results": results}
+        except Exception as e:
+            REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+            raise
 
 @app.post("/reset")
 def reset():
     """Clear all data from FAISS index and metadata store."""
     global _meta_df, _index
     endpoint = "reset"
-    REQ_COUNTER.labels(endpoint).inc()
+    REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
     with REQ_LAT.labels(endpoint).time():
         if _model is None or _index is None or _meta_df is None:
             raise HTTPException(status_code=503, detail="Service not ready")
