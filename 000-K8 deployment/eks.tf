@@ -155,7 +155,7 @@ resource "aws_eks_addon" "ebs_csi" {
     aws_iam_role_policy_attachment.ebs_csi_driver_policy,
     # Ensure nodes exist before installing addon to avoid long creation waits
     aws_eks_node_group.gpu,
-#    aws_eks_node_group.cpu,
+    aws_eks_node_group.cpu,
   ]
 }
 
@@ -224,11 +224,11 @@ resource "aws_eks_node_group" "gpu" {
   }
 
   # Taints commentés pour permettre à tous les pods de s'exécuter sur le node GPU (nécessaire quand il n'y a qu'un seul node group)
-  # taint {
-  #   key    = "nvidia.com/gpu"
-  #   value  = "true"
-  #   effect = "NO_SCHEDULE"
-  # }
+   taint {
+     key    = "nvidia.com/gpu"
+     value  = "true"
+     effect = "NO_SCHEDULE"
+   }
 
   # Pour forcer le refresh du nodegroup si nécessaire
   force_update_version = true
@@ -244,7 +244,7 @@ resource "aws_eks_node_group" "gpu" {
 }
 
 # === EKS Node Group - CPU (pour tous les autres workloads) ===
-/*
+
 resource "aws_eks_node_group" "cpu" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "cpu-nodes"
@@ -285,4 +285,3 @@ resource "aws_eks_node_group" "cpu" {
     aws_iam_role_policy_attachment.eks_node_AmazonEKS_CNI_Policy
   ]
 }
-*/

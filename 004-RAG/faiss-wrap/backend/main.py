@@ -33,6 +33,14 @@ import json
 import time
 import threading
 
+# OpenTelemetry tracing
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+
 import numpy as np
 import pandas as pd
 
@@ -81,6 +89,24 @@ REQ_COUNTER.labels(endpoint="upsert", status="error")
 REQ_COUNTER.labels(endpoint="search", status="success")
 REQ_COUNTER.labels(endpoint="search", status="error")
 REQ_COUNTER.labels(endpoint="reset", status="success")
+
+# ---------------------------
+# OpenTelemetry Configuration
+# ---------------------------
+
+# Configuration du service
+resource = Resource.create({"service.name": "faiss-wrap"})
+trace.set_tracer_provider(TracerProvider(resource=resource))
+
+# Exporter vers Grafana Alloy (OTLP)
+otlp_endpoint = os.getenv(
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "http://grafana-k8s-monitoring-alloy-receiver.llasta.svc.cluster.local:4317"
+)
+otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(otlp_exporter))
+
+tracer = trace.get_tracer(__name__)
 
 # Global components
 app = FastAPI(title="faiss-wrap", version="1.0.0")
@@ -134,6 +160,7 @@ async def lifespan(app: FastAPI):
     EMBED_DIM_GAUGE.set(EMBED_DIM)
     
     print(f"✅ Ready. Dim={EMBED_DIM}, items={len(_meta_df)}. Startup took {time.time()-t0:.1f}s")
+    print(f"📡 OTLP endpoint: {otlp_endpoint}")
     yield
     # Persist on shutdown
     with _lock:
@@ -141,6 +168,9 @@ async def lifespan(app: FastAPI):
         print("📝 Persisted index and metadata on shutdown")
 
 app.router.lifespan_context = lifespan
+
+# Instrumenter FastAPI pour le tracing automatique
+FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/health")
 def health():
@@ -221,48 +251,81 @@ def upsert(req: UpsertRequest):
 def search(req: SearchRequest):
     endpoint = "search"
     SEARCH_COUNTER.inc()
-    with REQ_LAT.labels(endpoint).time():
-        try:
-            if _model is None or _index is None or _meta_df is None:
-                REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
-                raise HTTPException(status_code=503, detail="Service not ready")
-            if not req.query.strip():
+    
+    with tracer.start_as_current_span("faiss.search") as span:
+        span.set_attribute("faiss.query", req.query[:100])
+        span.set_attribute("faiss.top_k", req.top_k)
+        span.set_attribute("faiss.index_size", _index.ntotal if _index else 0)
+        
+        with REQ_LAT.labels(endpoint).time():
+            try:
+                if _model is None or _index is None or _meta_df is None:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.message", "Service not ready")
+                    REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+                    raise HTTPException(status_code=503, detail="Service not ready")
+                if not req.query.strip():
+                    span.set_attribute("faiss.results_count", 0)
+                    REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
+                    SEARCH_RESULTS_HISTOGRAM.observe(0)
+                    return {"results": []}
+                q = req.query.strip()
+                top_k = max(1, min(int(req.top_k), 50))
+                
+                # Span pour l'embedding
+                with tracer.start_as_current_span("faiss.embed_query") as embed_span:
+                    embed_span.set_attribute("embedding.model", MODEL_NAME)
+                    embed_span.set_attribute("embedding.dimension", EMBED_DIM)
+                    embed_span.set_attribute("embedding.text_length", len(q))
+                    q_emb = _embed([q])
+                    faiss.normalize_L2(q_emb)
+                
+                if _index.ntotal == 0:
+                    span.set_attribute("faiss.results_count", 0)
+                    return {"results": []}
+                
+                # Span pour la recherche dans l'index
+                with tracer.start_as_current_span("faiss.index_search") as search_span:
+                    search_span.set_attribute("faiss.index_size", _index.ntotal)
+                    search_span.set_attribute("faiss.top_k", top_k)
+                    D, I = _index.search(q_emb, top_k)
+                    search_span.set_attribute("faiss.raw_results", len(I[0]))
+                
+                results = []
+                for i in range(len(I[0])):
+                    idx = int(I[0][i])
+                    score = float(D[0][i])
+                    if idx < 0 or idx >= len(_meta_df):
+                        continue
+                    row = _meta_df.iloc[idx]
+                    results.append({
+                        "id": row["id"],
+                        "text": row["text"],
+                        "metadata": row.get("metadata", {}),
+                        "score": score,
+                    })
+                
+                # Enregistrer le nombre de résultats retournés
+                num_results = len(results)
+                SEARCH_RESULTS_COUNTER.inc(num_results)
+                SEARCH_RESULTS_HISTOGRAM.observe(num_results)
                 REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
-                SEARCH_RESULTS_HISTOGRAM.observe(0)
-                return {"results": []}
-            q = req.query.strip()
-            top_k = max(1, min(int(req.top_k), 50))
-            # Embed query
-            q_emb = _embed([q])
-            faiss.normalize_L2(q_emb)
-            if _index.ntotal == 0:
-                return {"results": []}
-            # Search
-            D, I = _index.search(q_emb, top_k)
-            results = []
-            for i in range(len(I[0])):
-                idx = int(I[0][i])
-                score = float(D[0][i])
-                if idx < 0 or idx >= len(_meta_df):
-                    continue
-                row = _meta_df.iloc[idx]
-                results.append({
-                    "id": row["id"],
-                    "text": row["text"],
-                    "metadata": row.get("metadata", {}),
-                    "score": score,
-                })
-            
-            # Enregistrer le nombre de résultats retournés
-            num_results = len(results)
-            SEARCH_RESULTS_COUNTER.inc(num_results)
-            SEARCH_RESULTS_HISTOGRAM.observe(num_results)
-            REQ_COUNTER.labels(endpoint=endpoint, status="success").inc()
-            
-            return {"results": results}
-        except Exception as e:
-            REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
-            raise
+                
+                # Ajouter les attributs au span principal
+                span.set_attribute("faiss.results_count", num_results)
+                if results:
+                    scores = [r["score"] for r in results]
+                    span.set_attribute("faiss.score_min", min(scores))
+                    span.set_attribute("faiss.score_max", max(scores))
+                    span.set_attribute("faiss.score_avg", sum(scores)/len(scores))
+                
+                return {"results": results}
+            except Exception as e:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", type(e).__name__)
+                span.set_attribute("error.message", str(e)[:100])
+                REQ_COUNTER.labels(endpoint=endpoint, status="error").inc()
+                raise
 
 @app.post("/reset")
 def reset():

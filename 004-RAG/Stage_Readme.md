@@ -151,35 +151,6 @@ For this:
 * **faiss‑wrap**: `/metrics` for Prometheus (search/upsert latency, QPS, vector/index size, errors).
 * **Chatbot**: custom metrics (end‑to‑end latency, context length, k/m, avg score, hit‑rate \<threshold, % “I don’t know”).
 
-### CloudWatch Logs/Insights quick checklist (end‑to‑end chain user → cleaned → top‑k (+metadata) → prompt Qwen3 → answer Qwen3, all correlated by `request_id`)
-
-* **Structured JSON logs** in chatbot & faiss‑wrap, with a common **`request_id`**. Log these events:
-
-  * `user_query.received`, `user_query.cleaned`
-  * `rag.search.request`, `rag.search.results` (**id/page/source\_uri/score** + truncated *preview*)
-  * `rerank.done`
-  * `llm.request` (hash of final prompt, params), `llm.response` (preview, citations/chunk\_ids, tokens\_in/out, latency)
-* **Propagate `X-Request-ID`**: FastAPI middleware; forward the header to faiss‑wrap & vLLM; echo it back in HTTP responses.
-* **CloudWatch Logs**: deploy *aws‑for‑fluent‑bit* (DaemonSet) to ship `stdout/stderr` → create Log Groups `/llasta/chatbot` and `/llasta/faiss-wrap` (7–30 d retention); enable JSON parsing (or parse in Insights).
-* **Insights – useful queries**:
-
-  * Reconstruct a request by `request_id`:
-
-    ```sql
-    fields @timestamp, service, event, duration_ms, k, m, results
-    | filter request_id = "<RID>"
-    | sort @timestamp asc
-    ```
-  * Key latencies:
-
-    ```sql
-    fields @timestamp, service, event, duration_ms
-    | filter event in ["rag.search.results","rerank.done","llm.response"]
-    | stats avg(duration_ms), pct(duration_ms,95), count() by service, event
-    ```
-* **Test**: send a query and verify the full sequence in `/llasta/chatbot`:
-  `user_query.received` → `user_query.cleaned` → `rag.search.request` → `rag.search.results` → `rerank.done` → `llm.request` → `llm.response`.
-
 ---
 
 ## Step-by-step setup (Stage RAG)
@@ -278,6 +249,12 @@ After connecting through port-forward:
 curl -X POST http://localhost:9000/reset
 ```
 ---
+
+9) **To add a new version of Faiss wrap in ECR**
+```bash
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 142473567252.dkr.ecr.us-east-1.amazonaws.com
+docker pull 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3.6
+```
 
 ## Initial parameters (recommended)
 

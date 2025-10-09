@@ -1,6 +1,12 @@
 # faiss-wrap service dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+
+# PyTorch CPU-only (MUST be before sentence-transformers to avoid CUDA version)
+# Using 2.6+ to avoid CVE-2025-32434 vulnerability with torch.load
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+
 sentence-transformers==2.6.1
 faiss-cpu==1.8.0.post1
 numpy==1.26.4
@@ -8,3 +14,9 @@ pandas==2.2.2
 pyarrow==16.1.0
 prometheus-client==0.20.0
 pydantic==2.5.0
+
+# OpenTelemetry: Distributed tracing
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-instrumentation-fastapi==0.45b0
+opentelemetry-exporter-otlp==1.24.0

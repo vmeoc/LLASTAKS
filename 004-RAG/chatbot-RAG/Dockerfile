@@ -4,7 +4,7 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.title="Chatbot RAG"
 LABEL org.opencontainers.image.description="Chatbot RAG avec Qwen3 et FAISS"
 LABEL org.opencontainers.image.source="https://github.com/vmeoc/llasta"
-LABEL changelog="Added monitoring with Prometheus"
+LABEL changelog="Added distributed tracing with OpenTelemetry"
 
 
 # Environment

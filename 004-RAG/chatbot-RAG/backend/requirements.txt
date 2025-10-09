@@ -11,3 +11,10 @@ httpx==0.25.2
 pydantic==2.5.0
 python-multipart==0.0.6  # Pour le support des formulaires
 prometheus-client==0.19.0  # Pour exposer les métriques Prometheus
+
+# OpenTelemetry: Distributed tracing
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-instrumentation-fastapi==0.45b0
+opentelemetry-instrumentation-httpx==0.45b0
+opentelemetry-exporter-otlp==1.24.0

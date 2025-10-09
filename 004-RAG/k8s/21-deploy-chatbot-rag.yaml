@@ -22,7 +22,7 @@ spec:
       # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: chatbot-rag
-          image: vmeoc/chatbot-rag:v4.5
+          image: vmeoc/chatbot-rag:v4.6
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -37,6 +37,10 @@ spec:
               value: Qwen3-8B
             - name: FAISS_WRAP_URL
               value: http://faiss-wrap.llasta.svc.cluster.local:9000
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://grafana-k8s-monitoring-alloy-receiver.llasta.svc.cluster.local:4317
+            - name: OTEL_SERVICE_NAME
+              value: chatbot-rag
           volumeMounts:
             - name: bge-models
               mountPath: /models/hub

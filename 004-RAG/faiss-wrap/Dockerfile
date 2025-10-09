@@ -6,7 +6,7 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.title="FAISS wrap"
 LABEL org.opencontainers.image.description="FAISS wrapped in FASTAPI for chatbot RAG in LLASTAKS project"
 LABEL org.opencontainers.image.source="https://github.com/vmeoc/llasta"
-LABEL changelog="Added new chunk metrics for Prometheus"
+LABEL changelog="Added distributed tracing with OpenTelemetry"
 
 # Install system deps (git for sentence-transformers model downloads; curl for health/debug)
 RUN apt-get update && apt-get install -y --no-install-recommends \

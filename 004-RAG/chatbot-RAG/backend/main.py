@@ -38,6 +38,15 @@ from contextlib import asynccontextmanager
 # Prometheus metrics
 from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
+# OpenTelemetry tracing
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.sdk.resources import Resource
+
 # ---------------------------
 # Prometheus Metrics
 # ---------------------------
@@ -107,6 +116,24 @@ chatbot_rag_chunks_sent.observe(0)
 chatbot_rag_chunks_total.inc(0)  # inc(0) initialise le counter à 0
 
 # ---------------------------
+# OpenTelemetry Configuration
+# ---------------------------
+
+# Configuration du service
+resource = Resource.create({"service.name": "chatbot-rag"})
+trace.set_tracer_provider(TracerProvider(resource=resource))
+
+# Exporter vers Grafana Alloy (OTLP)
+otlp_endpoint = os.getenv(
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "http://grafana-k8s-monitoring-alloy-receiver.llasta.svc.cluster.local:4317"
+)
+otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(otlp_exporter))
+
+tracer = trace.get_tracer(__name__)
+
+# ---------------------------
 # Configuration (env vars)
 # ---------------------------
 
@@ -168,7 +195,12 @@ http_client: Optional[httpx.AsyncClient] = None
 async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=120.0)
+    
+    # Instrumenter httpx pour le tracing automatique
+    HTTPXClientInstrumentor().instrument()
+    
     print(f"🚀 Backend-RAG started - vLLM URL: {VLLM_BASE_URL} | faiss-wrap: {FAISS_WRAP_URL}")
+    print(f"📡 OTLP endpoint: {otlp_endpoint}")
     print(f"📁 Script directory: {SCRIPT_DIR}")
     print(f"📁 Project root: {PROJECT_ROOT}")
     print(f"📁 Frontend directory: {FRONTEND_DIR}")
@@ -184,6 +216,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Instrumenter FastAPI pour le tracing automatique
+FastAPIInstrumentor.instrument_app(app)
+
 # Serve static frontend from sibling folder `frontend/`
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
@@ -195,48 +230,68 @@ async def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> List[Dict[str,
     Call faiss-wrap /search to retrieve top-k chunks for the query.
     Returns a list of {text, metadata, score} dicts. On failure, returns [].
     """
-    global http_client
-    print(f"🔍 RAG: Searching for '{query[:50]}{'...' if len(query) > 50 else ''}' (top_k={top_k})")
-    
-    try:
-        url = f"{FAISS_WRAP_URL}/search"
-        payload = {"query": query, "top_k": top_k}
+    with tracer.start_as_current_span("rag.retrieve_context") as span:
+        global http_client
+        span.set_attribute("rag.query", query[:100])
+        span.set_attribute("rag.top_k", top_k)
+        span.set_attribute("rag.min_score", RAG_MIN_SCORE)
         
-        resp = await http_client.post(url, json=payload)
+        print(f"🔍 RAG: Searching for '{query[:50]}{'...' if len(query) > 50 else ''}' (top_k={top_k})")
         
-        if resp.status_code != 200:
-            error_text = await _safe_text(resp)
-            print(f"⚠️ FAISS error {resp.status_code}: {error_text[:100]}")
+        try:
+            url = f"{FAISS_WRAP_URL}/search"
+            payload = {"query": query, "top_k": top_k}
+            
+            # Le span HTTP sera créé automatiquement par httpx instrumentation
+            resp = await http_client.post(url, json=payload)
+            
+            if resp.status_code != 200:
+                error_text = await _safe_text(resp)
+                print(f"⚠️ FAISS error {resp.status_code}: {error_text[:100]}")
+                span.set_attribute("error", True)
+                span.set_attribute("error.message", error_text[:100])
+                chatbot_faiss_requests_total.labels(status='error').inc()
+                return []
+                
+            data = resp.json()
+            results = data.get("results", []) if isinstance(data, dict) else []
+            
+            # Filtrer par score de similarité (ne garder que les chunks pertinents)
+            filtered_results = [r for r in results if r.get("score", 0) >= RAG_MIN_SCORE]
+            
+            # Incrémenter le compteur de succès FAISS
+            chatbot_faiss_requests_total.labels(status='success').inc()
+            
+            # Ajouter les attributs de span
+            span.set_attribute("rag.results_raw_count", len(results))
+            span.set_attribute("rag.results_filtered_count", len(filtered_results))
+            
+            if filtered_results:
+                print(f"✅ FAISS: Retrieved {len(filtered_results)}/{len(results)} chunks (score >= {RAG_MIN_SCORE})")
+                # Log des scores pour debug
+                scores = [r.get("score", 0) for r in filtered_results]
+                span.set_attribute("rag.score_min", min(scores))
+                span.set_attribute("rag.score_max", max(scores))
+                span.set_attribute("rag.score_avg", sum(scores)/len(scores))
+                print(f"📊 Scores: min={min(scores):.3f}, max={max(scores):.3f}, avg={sum(scores)/len(scores):.3f}")
+            else:
+                print(f"📦 FAISS: No results above threshold (min_score={RAG_MIN_SCORE})")
+            
+            return filtered_results
+            
+        except httpx.ConnectError as e:
+            print(f"⚠️ FAISS unavailable at {FAISS_WRAP_URL} - continuing without RAG")
+            span.set_attribute("error", True)
+            span.set_attribute("error.type", "ConnectError")
             chatbot_faiss_requests_total.labels(status='error').inc()
             return []
-            
-        data = resp.json()
-        results = data.get("results", []) if isinstance(data, dict) else []
-        
-        # Filtrer par score de similarité (ne garder que les chunks pertinents)
-        filtered_results = [r for r in results if r.get("score", 0) >= RAG_MIN_SCORE]
-        
-        # Incrémenter le compteur de succès FAISS
-        chatbot_faiss_requests_total.labels(status='success').inc()
-        
-        if filtered_results:
-            print(f"✅ FAISS: Retrieved {len(filtered_results)}/{len(results)} chunks (score >= {RAG_MIN_SCORE})")
-            # Log des scores pour debug
-            scores = [r.get("score", 0) for r in filtered_results]
-            print(f"📊 Scores: min={min(scores):.3f}, max={max(scores):.3f}, avg={sum(scores)/len(scores):.3f}")
-        else:
-            print(f"📦 FAISS: No results above threshold (min_score={RAG_MIN_SCORE})")
-        
-        return filtered_results
-        
-    except httpx.ConnectError:
-        print(f"⚠️ FAISS unavailable at {FAISS_WRAP_URL} - continuing without RAG")
-        chatbot_faiss_requests_total.labels(status='error').inc()
-        return []
-    except Exception as e:
-        print(f"⚠️ FAISS error: {type(e).__name__}: {str(e)[:100]}")
-        chatbot_faiss_requests_total.labels(status='error').inc()
-        return []
+        except Exception as e:
+            print(f"⚠️ FAISS error: {type(e).__name__}: {str(e)[:100]}")
+            span.set_attribute("error", True)
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_attribute("error.message", str(e)[:100])
+            chatbot_faiss_requests_total.labels(status='error').inc()
+            return []
 
 async def _safe_text(response: httpx.Response) -> str:
     try:
@@ -250,33 +305,42 @@ def build_context_block(results: List[Dict[str, Any]], limit_chars: int = MAX_CO
     We include simple source hints for transparency.
     Returns (context_block, num_chunks_included)
     """
-    if not results:
-        return "", 0
-    
-    lines: List[str] = ["You have access to the following context passages. Cite them when relevant.\n"]
-    running = 0
-    included_chunks = 0
-    
-    for i, r in enumerate(results, start=1):
-        text = (r.get("text") or "").strip()
-        meta = r.get("metadata") or {}
-        src = meta.get("source") or meta.get("file") or meta.get("s3_key") or "unknown"
-        page = meta.get("page")
+    with tracer.start_as_current_span("rag.build_context") as span:
+        span.set_attribute("rag.input_chunks", len(results))
+        span.set_attribute("rag.limit_chars", limit_chars)
         
-        header = f"[{i}] Source: {src}{' p.' + str(page) if page is not None else ''}"
-        snippet = f"{header}\n{text}\n"
+        if not results:
+            span.set_attribute("rag.chunks_sent", 0)
+            span.set_attribute("rag.context_chars", 0)
+            return "", 0
         
-        if running + len(snippet) > limit_chars:
-            break
+        lines: List[str] = ["You have access to the following context passages. Cite them when relevant.\n"]
+        running = 0
+        included_chunks = 0
+        
+        for i, r in enumerate(results, start=1):
+            text = (r.get("text") or "").strip()
+            meta = r.get("metadata") or {}
+            src = meta.get("source") or meta.get("file") or meta.get("s3_key") or "unknown"
+            page = meta.get("page")
             
-        lines.append(snippet)
-        running += len(snippet)
-        included_chunks += 1
-    
-    context_block = "\n".join(lines).strip()
-    print(f"📝 RAG: Built context with {included_chunks}/{len(results)} chunks ({len(context_block)} chars)")
-    
-    return context_block, included_chunks
+            header = f"[{i}] Source: {src}{' p.' + str(page) if page is not None else ''}"
+            snippet = f"{header}\n{text}\n"
+            
+            if running + len(snippet) > limit_chars:
+                break
+                
+            lines.append(snippet)
+            running += len(snippet)
+            included_chunks += 1
+        
+        context_block = "\n".join(lines).strip()
+        span.set_attribute("rag.chunks_sent", included_chunks)
+        span.set_attribute("rag.context_chars", len(context_block))
+        
+        print(f"📝 RAG: Built context with {included_chunks}/{len(results)} chunks ({len(context_block)} chars)")
+        
+        return context_block, included_chunks
 
 def inject_context_into_messages(messages: List[Dict[str, str]], context_block: str) -> List[Dict[str, str]]:
     """
@@ -430,46 +494,85 @@ async def chat_endpoint(request: ChatRequest):
                     media_type="text/plain",
                 )
             else:
-                try:
-                    response = await http_client.post(
-                        f"{VLLM_BASE_URL}/v1/chat/completions",
-                        json=vllm_request,
-                        headers={"Authorization": f"Bearer {VLLM_API_KEY}"},
-                    )
-                    response.raise_for_status()
+                # Span pour l'appel vLLM complet
+                with tracer.start_as_current_span("vllm.generate") as vllm_span:
+                    vllm_span.set_attribute("llm.model", VLLM_MODEL_NAME)
+                    vllm_span.set_attribute("llm.temperature", request.temperature)
+                    vllm_span.set_attribute("llm.max_tokens", effective_max_tokens or -1)
+                    vllm_span.set_attribute("llm.messages_count", len(messages_for_vllm))
+                    vllm_span.set_attribute("llm.request_size", len(json.dumps(vllm_request)))
                     
-                    # Incrémenter le compteur de succès vLLM
-                    chatbot_vllm_requests_total.labels(status='success').inc()
-                    
-                    result = response.json()
-                    raw_content = result["choices"][0]["message"]["content"]
-                    
-                    # Log de la réponse brute de vLLM
-                    print(f"🔍 LLM Response length: {len(raw_content)} chars")
-                    print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
-                    if len(raw_content) > 100:
-                        print(f"🔍 LLM Response (last 100 chars): {raw_content[-100:]}")
-                    
-                    thinking_content, final_content = parse_thinking_content(raw_content)
-                    
-                    # Log du parsing
-                    print(f"🧠 Parsing: thinking={len(thinking_content)} chars, final={len(final_content)} chars")
-                    
-                    # Incrémenter le compteur de succès pour les requêtes entrantes
-                    chatbot_requests_total.labels(endpoint='/api/chat', status='success').inc()
-                    
-                    return ChatResponse(
-                        message=ChatMessage(
-                            role="assistant",
-                            content=final_content,
-                        ),
-                        thinking_content=thinking_content if thinking_content else None,
-                        usage=result.get("usage", {}),
-                    )
-                except httpx.HTTPStatusError as vllm_error:
-                    # Incrémenter le compteur d'erreurs vLLM
-                    chatbot_vllm_requests_total.labels(status='error').inc()
-                    raise vllm_error
+                    try:
+                        # Span pour l'appel HTTP (créé automatiquement par httpx instrumentation)
+                        response = await http_client.post(
+                            f"{VLLM_BASE_URL}/v1/chat/completions",
+                            json=vllm_request,
+                            headers={"Authorization": f"Bearer {VLLM_API_KEY}"},
+                        )
+                        response.raise_for_status()
+                        
+                        # Incrémenter le compteur de succès vLLM
+                        chatbot_vllm_requests_total.labels(status='success').inc()
+                        
+                        # Span pour le parsing de la réponse
+                        with tracer.start_as_current_span("vllm.response") as resp_span:
+                            result = response.json()
+                            raw_content = result["choices"][0]["message"]["content"]
+                            
+                            resp_span.set_attribute("llm.response_chars", len(raw_content))
+                            
+                            # Log de la réponse brute de vLLM
+                            print(f"🔍 LLM Response length: {len(raw_content)} chars")
+                            print(f"🔍 LLM Response (first 200 chars): {raw_content[:200]}")
+                            if len(raw_content) > 100:
+                                print(f"🔍 LLM Response (last 100 chars): {raw_content[-100:]}")
+                            
+                            thinking_content, final_content = parse_thinking_content(raw_content)
+                            
+                            resp_span.set_attribute("llm.thinking_chars", len(thinking_content))
+                            resp_span.set_attribute("llm.final_chars", len(final_content))
+                            resp_span.set_attribute("llm.has_thinking", bool(thinking_content))
+                            
+                            usage = result.get("usage", {})
+                            resp_span.set_attribute("llm.tokens_prompt", usage.get("prompt_tokens", 0))
+                            resp_span.set_attribute("llm.tokens_completion", usage.get("completion_tokens", 0))
+                            resp_span.set_attribute("llm.tokens_total", usage.get("total_tokens", 0))
+                            
+                            # Log du parsing
+                            print(f"🧠 Parsing: thinking={len(thinking_content)} chars, final={len(final_content)} chars")
+                        
+                        # Ajouter les métriques au span parent
+                        vllm_span.set_attribute("llm.tokens_prompt", usage.get("prompt_tokens", 0))
+                        vllm_span.set_attribute("llm.tokens_completion", usage.get("completion_tokens", 0))
+                        
+                        # Incrémenter le compteur de succès pour les requêtes entrantes
+                        chatbot_requests_total.labels(endpoint='/api/chat', status='success').inc()
+                        
+                        # Span pour l'envoi au frontend
+                        with tracer.start_as_current_span("response.send_to_frontend") as send_span:
+                            chat_response = ChatResponse(
+                                message=ChatMessage(
+                                    role="assistant",
+                                    content=final_content,
+                                ),
+                                thinking_content=thinking_content if thinking_content else None,
+                                usage=result.get("usage", {}),
+                            )
+                            
+                            response_json = chat_response.model_dump_json()
+                            send_span.set_attribute("http.response_size", len(response_json))
+                            send_span.set_attribute("response.has_thinking", bool(thinking_content))
+                            send_span.set_attribute("response.final_chars", len(final_content))
+                            
+                            return chat_response
+                            
+                    except httpx.HTTPStatusError as vllm_error:
+                        # Incrémenter le compteur d'erreurs vLLM
+                        vllm_span.set_attribute("error", True)
+                        vllm_span.set_attribute("error.type", "HTTPStatusError")
+                        vllm_span.set_attribute("error.status_code", vllm_error.response.status_code)
+                        chatbot_vllm_requests_total.labels(status='error').inc()
+                        raise vllm_error
 
         except httpx.HTTPStatusError as e:
             print(f"❌ vLLM error {e.response.status_code}: {e.response.text[:100]}")

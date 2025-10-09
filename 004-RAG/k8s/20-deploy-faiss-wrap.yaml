@@ -22,7 +22,7 @@ spec:
       # ce pod va sur le nœud CPU (car il n'a pas de toleration pour le GPU)
       containers:
         - name: faiss-wrap
-          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3.1
+          image: 142473567252.dkr.ecr.us-east-1.amazonaws.com/dockerhub/vmeoc/faiss-wrap:v3.64
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9000
@@ -33,6 +33,10 @@ spec:
               value: /models/hub
             - name: EMBED_MODEL
               value: BAAI/bge-m3
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://grafana-k8s-monitoring-alloy-receiver.llasta.svc.cluster.local:4317
+            - name: OTEL_SERVICE_NAME
+              value: faiss-wrap
           volumeMounts:
             - name: faiss-data
               mountPath: /data

@@ -1,0 +1,35 @@
+# Ignore VCS
+.git
+.gitignore
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.venv
+**/.venv
+venv
+backend/venv
+.env
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+
+# Caches
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.cache/
+
+# Data (should be in volumes, not in image)
+data/
+*.faiss
+*.parquet
+
+# Models (should be in volumes, not in image)
+models/
+*.bin
+*.safetensors
